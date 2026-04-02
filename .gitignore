@@ -1,0 +1,14 @@
+node_modules/
+dist/
+scripts/.venv/
+.env
+.env.local
+*.mp4
+*.mov
+*.webm
+*_clips_*/
+config/clipper.json
+.DS_Store
+.claude/
+.claude-flow/
+.mcp.json
