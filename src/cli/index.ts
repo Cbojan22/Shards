@@ -77,7 +77,7 @@ const program = new Command();
 program
   .name('shards-cli')
   .description('Shards — scripted entry point for the AI viral clip generator (use `shards` for the TUI)')
-  .version('1.2.0');
+  .version('1.3.0');
 
 // === PROCESS COMMAND ===
 program
@@ -94,7 +94,7 @@ program
   .option('-q, --quality <level>', 'Export quality (high, medium, low)', '')
   .option('-f, --format <fmt>', 'Export format (mp4, mov, webm)', '')
   .option('--video-format <kind>', 'Layout: fullscreen | centered (skips the prompt)')
-  .option('--caption-theme <id>', 'Caption theme: golden | matrix | cyberpunk | vhs | mono | sunset')
+  .option('--caption-theme <id>', 'Caption theme (run `shards-cli config --show` to list all 16)')
   .option('--api-key <key>', 'Anthropic API key (prefer ANTHROPIC_API_KEY env var)')
   .action(async (input: string, opts: Record<string, string | boolean>) => {
     const spinner = ora();
@@ -266,7 +266,7 @@ program
   .option('--quality <level>', 'Set default quality (high/medium/low)')
   .option('--format <fmt>', 'Set default format (mp4/mov/webm)')
   .option('--video-format <kind>', 'Set default video format (fullscreen/centered)')
-  .option('--caption-theme <id>', 'Set default caption theme (golden/matrix/cyberpunk/vhs/mono/sunset)')
+  .option('--caption-theme <id>', 'Set default caption theme (16 options — see README for the full list)')
   .option('--max-clips <n>', 'Set max clips per video')
   .option('--min-duration <sec>', 'Set minimum clip duration')
   .option('--max-duration <sec>', 'Set maximum clip duration')

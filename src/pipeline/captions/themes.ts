@@ -6,7 +6,17 @@ export type CaptionThemeId =
   | 'cyberpunk'
   | 'vhs'
   | 'mono'
-  | 'sunset';
+  | 'sunset'
+  | 'newsprint'
+  | 'frost'
+  | 'inferno'
+  | 'brutalist'
+  | 'pastel'
+  | 'y2k'
+  | 'amber'
+  | 'magazine'
+  | 'notebook'
+  | 'vapor';
 
 export interface CaptionTheme {
   id: CaptionThemeId;
@@ -116,6 +126,159 @@ export const CAPTION_THEMES: Record<CaptionThemeId, CaptionTheme> = {
     bold: true,
     swatchFg: '#FF6F61',
     swatchBg: '#3E1F47',
+  },
+  newsprint: {
+    id: 'newsprint',
+    name: 'Newsprint',
+    tagline: 'Editorial serif with newspaper-red emphasis.',
+    fontFamily: 'Times New Roman',
+    primaryColor: '#1A1A1A',
+    highlightColor: '#C8102E',
+    accentColor: '#4A5568',
+    // Light themes get a white outline so the dark text reads as a
+    // "newspaper cutout" against varied video backgrounds.
+    outlineColor: '#FFFFFF',
+    shadowColor: '#888888',
+    outlineWidth: 7,
+    bold: true,
+    swatchFg: '#C8102E',
+    swatchBg: '#FFFFFF',
+  },
+  frost: {
+    id: 'frost',
+    name: 'Frost',
+    tagline: 'Cool tech minimal — Apple Keynote energy.',
+    fontFamily: 'Helvetica Neue',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#00B4D8',
+    accentColor: '#90E0EF',
+    outlineColor: '#03045E',
+    shadowColor: '#001D3D',
+    outlineWidth: 5,
+    bold: true,
+    swatchFg: '#00B4D8',
+    swatchBg: '#03045E',
+  },
+  inferno: {
+    id: 'inferno',
+    name: 'Inferno',
+    tagline: 'Heavy condensed orange — sports hype + breaking news.',
+    fontFamily: 'Impact',
+    primaryColor: '#FF4500',
+    highlightColor: '#FFD700',
+    accentColor: '#FF1B1B',
+    outlineColor: '#1A0000',
+    shadowColor: '#000000',
+    outlineWidth: 6,
+    bold: true,
+    swatchFg: '#FFD700',
+    swatchBg: '#1A0000',
+  },
+  brutalist: {
+    id: 'brutalist',
+    name: 'Brutalist',
+    tagline: 'Stark white with thick black borders, single signal-red accent.',
+    fontFamily: 'Helvetica Neue',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FF0033',
+    accentColor: '#FFFFFF',
+    outlineColor: '#000000',
+    shadowColor: '#000000',
+    outlineWidth: 8,
+    bold: true,
+    swatchFg: '#FFFFFF',
+    swatchBg: '#000000',
+  },
+  pastel: {
+    id: 'pastel',
+    name: 'Pastel Pop',
+    tagline: 'Soft femme dreamy — wellness and lifestyle vibes.',
+    fontFamily: 'Avenir Next',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FFB6C1',
+    accentColor: '#B19CD9',
+    outlineColor: '#6B4E71',
+    shadowColor: '#2D1B3D',
+    outlineWidth: 5,
+    bold: true,
+    swatchFg: '#FFB6C1',
+    swatchBg: '#2D1B3D',
+  },
+  y2k: {
+    id: 'y2k',
+    name: 'Y2K',
+    tagline: 'Early-internet maximalist — chatroom nostalgia.',
+    fontFamily: 'Trebuchet MS',
+    primaryColor: '#00FFFF',
+    highlightColor: '#C2FF00',
+    accentColor: '#FF00C8',
+    outlineColor: '#000080',
+    shadowColor: '#000000',
+    outlineWidth: 6,
+    bold: true,
+    swatchFg: '#00FFFF',
+    swatchBg: '#000080',
+  },
+  amber: {
+    id: 'amber',
+    name: 'Terminal Amber',
+    tagline: 'Warm CRT amber — the analog cousin of Matrix.',
+    fontFamily: 'Courier New',
+    primaryColor: '#FFB000',
+    highlightColor: '#FFE600',
+    accentColor: '#FF8C00',
+    outlineColor: '#1F0F00',
+    shadowColor: '#000000',
+    outlineWidth: 5,
+    bold: true,
+    swatchFg: '#FFB000',
+    swatchBg: '#1F0F00',
+  },
+  magazine: {
+    id: 'magazine',
+    name: 'Magazine',
+    tagline: 'Didot serif with champagne gold — Vogue cover energy.',
+    fontFamily: 'Didot',
+    primaryColor: '#1A1A1A',
+    highlightColor: '#D4AF37',
+    accentColor: '#C0C0C0',
+    outlineColor: '#FFFFFF',
+    shadowColor: '#888888',
+    outlineWidth: 6,
+    bold: true,
+    swatchFg: '#D4AF37',
+    swatchBg: '#FFFFFF',
+  },
+  notebook: {
+    id: 'notebook',
+    name: 'Notebook',
+    tagline: 'Marker Felt navy ink — handwritten margin notes.',
+    fontFamily: 'Marker Felt',
+    primaryColor: '#1E3A5F',
+    highlightColor: '#E63946',
+    accentColor: '#FFB627',
+    outlineColor: '#FFFFFF',
+    shadowColor: '#888888',
+    outlineWidth: 7,
+    // Marker Felt has its own weight; bolding it makes it muddy.
+    bold: false,
+    swatchFg: '#1E3A5F',
+    swatchBg: '#FFFFFF',
+  },
+  vapor: {
+    id: 'vapor',
+    name: 'Vapor',
+    tagline: '80s vaporwave — pink + cyan + purple aesthetic.',
+    fontFamily: 'Futura',
+    primaryColor: '#FF71CE',
+    highlightColor: '#01CDFE',
+    accentColor: '#B967FF',
+    outlineColor: '#050546',
+    shadowColor: '#B967FF',
+    outlineWidth: 6,
+    bold: true,
+    swatchFg: '#FF71CE',
+    swatchBg: '#050546',
   },
 };
 

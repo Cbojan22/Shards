@@ -77,7 +77,7 @@ Your latest answers always become the new defaults so the next run is faster.
 
 ### Caption themes
 
-Six baked-in looks, each pairing a font with a colour palette. The wizard previews the highlighted theme inline before you commit.
+Sixteen baked-in looks, each pairing a font with a colour palette. The wizard previews the highlighted theme inline before you commit. To see them all in motion, run `shards-cli preview` or pick **Preview themes** from the TUI menu.
 
 | Theme | Vibe | Font |
 |-------|------|------|
@@ -87,6 +87,16 @@ Six baked-in looks, each pairing a font with a colour palette. The wizard previe
 | `vhs` | Bold red on black | Impact |
 | `mono` | Plain white, no emphasis | Helvetica Neue |
 | `sunset` | Warm orange + coral | Futura |
+| `newsprint` | Editorial serif with newspaper-red emphasis | Times New Roman |
+| `frost` | Cool tech minimal — Apple Keynote energy | Helvetica Neue |
+| `inferno` | Heavy condensed orange — sports hype | Impact |
+| `brutalist` | Stark white with thick black borders | Helvetica Neue |
+| `pastel` | Soft femme dreamy — wellness vibes | Avenir Next |
+| `y2k` | Early-internet maximalist | Trebuchet MS |
+| `amber` | Warm CRT amber, Matrix's analog cousin | Courier New |
+| `magazine` | Didot serif with champagne gold — Vogue cover | Didot |
+| `notebook` | Marker Felt navy ink — handwritten margin notes | Marker Felt |
+| `vapor` | 80s vaporwave — pink + cyan + purple | Futura |
 
 ### Video format
 
