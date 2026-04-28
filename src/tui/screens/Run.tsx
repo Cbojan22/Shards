@@ -138,7 +138,8 @@ export function Run({ answers, baseConfig, apiKey, onDone }: RunProps): React.Re
             videoFormat: answers.videoFormat,
             withCaptions: answers.withCaptions,
             captionStyle,
-            includeMetadata: true,
+            // Output folder stays mp4-only — see CLI for the same setting.
+            includeMetadata: false,
           },
         };
 

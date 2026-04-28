@@ -1,7 +1,8 @@
 import path from 'path';
 import { mkdtemp, mkdir, rm, writeFile, unlink } from 'fs/promises';
-import { tmpdir, homedir } from 'os';
+import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { fileURLToPath } from 'url';
 import {
   CAPTION_THEMES,
   CAPTION_THEME_IDS,
@@ -38,11 +39,18 @@ const SAMPLES: CaptionSample[] = [
 ];
 
 export function defaultPreviewPath(): string {
-  const home = process.env.HOME || homedir();
-  const icloudSnag = path.join(home, 'Library/Mobile Documents/com~apple~CloudDocs/Snag');
-  // Save under the iCloud Snag folder when present so the file shows up in
-  // the same place as rendered clips. Otherwise drop it next to ~/.shards.
-  return path.join(icloudSnag, 'shards-themes-preview.mp4');
+  // Preview artifacts land inside the project repo (under `previews/`) so
+  // the user can open them directly from their IDE — not in iCloud, not in
+  // a hidden folder. Rendered final clips still default to iCloud/Snag;
+  // previews are inspection artifacts and stay local.
+  // `import.meta.url` is the real path of this module after symlink
+  // resolution, so this works whether shards-cli was invoked from the
+  // project dir or via an `npm link`-installed global bin.
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  // From src/pipeline/preview.ts OR dist/pipeline/preview.js the project
+  // root is two directories up.
+  const projectRoot = path.resolve(moduleDir, '..', '..');
+  return path.join(projectRoot, 'previews', 'themes-preview.mp4');
 }
 
 export async function generateThemesPreview(

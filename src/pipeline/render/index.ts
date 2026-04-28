@@ -1,5 +1,7 @@
 import path from 'path';
-import { mkdir } from 'fs/promises';
+import { mkdir, unlink } from 'fs/promises';
+import { tmpdir } from 'os';
+import { randomUUID } from 'crypto';
 import {
   ViralClip,
   TranscriptResult,
@@ -89,11 +91,13 @@ export async function renderClip(
   );
 
 
-  // Generate captions if enabled
+  // Generate captions if enabled. The ASS file lives in tmpdir for the
+  // duration of the burn-in pass — we only need it as a libass input, and
+  // the user wants the output folder to contain finished mp4s only, no
+  // working files.
   let subtitlePath: string | undefined;
   if (exportOptions.withCaptions) {
-    const captionDir = path.dirname(outputPath);
-    subtitlePath = path.join(captionDir, `${clip.id}_captions.ass`);
+    subtitlePath = path.join(tmpdir(), `shards_caption_${clip.id}_${randomUUID()}.ass`);
     await generateCaptions(
       transcript, startTime, endTime, exportOptions.captionStyle, subtitlePath
     );
@@ -102,24 +106,27 @@ export async function renderClip(
 
   await mkdir(path.dirname(outputPath), { recursive: true });
 
-  // Render with FFmpeg
-  await renderClipWithReframe({
-    inputPath,
-    outputPath,
-    start: startTime,
-    end: endTime,
-    cropKeyframes: keyframes.map((kf) => ({
-      time: kf.time,
-      x: kf.x,
-      y: kf.y,
-      w: kf.width,
-      h: kf.height,
-    })),
-    resolution: exportOptions.resolution,
-    quality: exportOptions.quality,
-    subtitlePath,
-    videoFormat: exportOptions.videoFormat,
-  });
+  try {
+    await renderClipWithReframe({
+      inputPath,
+      outputPath,
+      start: startTime,
+      end: endTime,
+      cropKeyframes: keyframes.map((kf) => ({
+        time: kf.time,
+        x: kf.x,
+        y: kf.y,
+        w: kf.width,
+        h: kf.height,
+      })),
+      resolution: exportOptions.resolution,
+      quality: exportOptions.quality,
+      subtitlePath,
+      videoFormat: exportOptions.videoFormat,
+    });
+  } finally {
+    if (subtitlePath) await unlink(subtitlePath).catch(() => {});
+  }
 
   onProgress?.(`  Rendered: ${path.basename(outputPath)}`);
   return outputPath;

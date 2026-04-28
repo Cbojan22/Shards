@@ -77,7 +77,7 @@ const program = new Command();
 program
   .name('shards-cli')
   .description('Shards — scripted entry point for the AI viral clip generator (use `shards` for the TUI)')
-  .version('1.3.0');
+  .version('1.4.0');
 
 // === PROCESS COMMAND ===
 program
@@ -179,7 +179,9 @@ program
           videoFormat,
           withCaptions: opts.captions !== false && config.withCaptions,
           captionStyle: themedCaptionStyle,
-          includeMetadata: true,
+          // User wants finished output dirs to contain mp4 files only —
+          // no clips_metadata.json, no .ass files alongside the videos.
+          includeMetadata: false,
         },
       };
 
