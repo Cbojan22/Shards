@@ -34,7 +34,7 @@ export async function analyzeForViralClips(
     maxClips = 20,
     minDuration = 15,
     maxDuration = 180,
-    model = 'claude-sonnet-4-20250514',
+    model = 'claude-sonnet-4-6',
   } = options;
 
   const client = new Anthropic({ apiKey });
@@ -89,7 +89,8 @@ async function analyzeChunk(
   maxDuration: number,
   maxClips: number
 ): Promise<RawClipSuggestion[]> {
-  const userPrompt = `Analyze this transcript and identify up to ${maxClips} moments that would make viral short-form video clips.
+  // Static across every chunk in a run — cacheable.
+  const userPromptPrefix = `Analyze this transcript and identify up to ${maxClips} moments that would make viral short-form video clips.
 
 REQUIREMENTS:
 - Each clip MUST be ${minDuration}-${maxDuration} seconds long (end - start >= ${minDuration})
@@ -114,25 +115,35 @@ Return ONLY a JSON array with this exact structure (no other text):
 Categories: hot_take, emotional, humor, storytelling, insight, debate, revelation, quotable, relatable, shocking_stat
 
 TRANSCRIPT:
-${chunk}`;
+`;
+
+  // System and user-prompt prefix are identical across all chunks in a run; mark them
+  // for ephemeral (5-min) prompt caching. Anthropic silently no-ops if the cached
+  // prefix is below the model's minimum cacheable token count.
+  const requestPayload: Anthropic.MessageCreateParamsNonStreaming = {
+    model,
+    max_tokens: 4096,
+    system: [
+      { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    ],
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: userPromptPrefix, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: chunk },
+        ],
+      },
+    ],
+  };
 
   let response: Anthropic.Message;
   try {
-    response = await client.messages.create({
-      model,
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userPrompt }],
-    });
+    response = await client.messages.create(requestPayload);
   } catch (err) {
     // Retry once
     try {
-      response = await client.messages.create({
-        model,
-        max_tokens: 4096,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userPrompt }],
-      });
+      response = await client.messages.create(requestPayload);
     } catch (retryErr) {
       throw new Error(
         `Claude API failed after retry: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`

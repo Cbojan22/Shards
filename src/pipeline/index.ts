@@ -2,9 +2,6 @@ import path from 'path';
 import { mkdir, writeFile } from 'fs/promises';
 import {
   PipelineConfig,
-  TranscriptResult,
-  FaceDetectionResult,
-  SpeakerFaceMapping,
   ViralAnalysisResult,
   ExportOptions,
 } from '../types/index.js';
@@ -92,6 +89,7 @@ export async function runPipeline(
     format: 'mp4',
     quality: 'high',
     resolution: { width: 1080, height: 1920 },
+    videoFormat: 'fullscreen',
     withCaptions: true,
     captionStyle: DEFAULT_CAPTION_STYLE,
     includeMetadata: true,

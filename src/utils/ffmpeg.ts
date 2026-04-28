@@ -80,15 +80,31 @@ export function extractClip(
 export function getQualityPreset(quality: 'high' | 'medium' | 'low'): {
   crf: number;
   preset: string;
+  // Target H.264 bitrate for VideoToolbox at 1080×1920 short-form. Bitrate
+  // mode is far more reliable than `-q:v` on h264_videotoolbox — the latter
+  // fails with EINVAL on several common FFmpeg builds.
+  vtBitrate: string;
 } {
   switch (quality) {
     case 'high':
-      return { crf: 18, preset: 'slow' };
+      return { crf: 18, preset: 'slow',   vtBitrate: '8M' };
     case 'medium':
-      return { crf: 23, preset: 'medium' };
+      return { crf: 23, preset: 'medium', vtBitrate: '5M' };
     case 'low':
-      return { crf: 28, preset: 'fast' };
+      return { crf: 28, preset: 'fast',   vtBitrate: '3M' };
   }
+}
+
+// macOS Apple Silicon / Intel both expose VideoToolbox H.264 hardware encoding
+// via `h264_videotoolbox`. On Mac it offloads encoding to the Media Engine and
+// drops the render stage's CPU spend close to zero; on other platforms we fall
+// back to libx264.
+function videoEncoderArgs(quality: 'high' | 'medium' | 'low'): string[] {
+  const { crf, preset, vtBitrate } = getQualityPreset(quality);
+  if (process.platform === 'darwin') {
+    return ['-c:v', 'h264_videotoolbox', '-b:v', vtBitrate];
+  }
+  return ['-c:v', 'libx264', '-preset', preset, '-crf', String(crf)];
 }
 
 export async function renderClipWithReframe(job: {
@@ -100,8 +116,9 @@ export async function renderClipWithReframe(job: {
   resolution: { width: number; height: number };
   quality: 'high' | 'medium' | 'low';
   subtitlePath?: string;
+  videoFormat?: 'fullscreen' | 'centered';
 }): Promise<void> {
-  const { crf, preset } = getQualityPreset(job.quality);
+  const encoderArgs = videoEncoderArgs(job.quality);
   const duration = job.end - job.start;
 
   const cropW = job.cropKeyframes[0]?.w || 608;
@@ -121,11 +138,26 @@ export async function renderClipWithReframe(job: {
   const { tmpdir } = await import('os');
   const { join } = await import('path');
 
+  // In 'centered' mode the video occupies exactly half the output height,
+  // perfectly centered, so the combined black bar area equals the video area.
+  // We enforce even pixel counts because yuv420p chroma subsampling rejects
+  // odd dimensions.
+  const isCentered = job.videoFormat === 'centered';
+  const scaledHeight = isCentered
+    ? Math.round(job.resolution.height / 4) * 2
+    : job.resolution.height;
+  const padY = isCentered
+    ? Math.round((job.resolution.height - scaledHeight) / 4) * 2
+    : 0;
+  const padStep = isCentered
+    ? `,pad=${job.resolution.width}:${job.resolution.height}:0:${padY}:black`
+    : '';
+
   // Write the crop+scale filter to a temp script file to avoid comma parsing issues
   // FFmpeg's -vf parser treats commas in if() expressions as filter separators
-  const cropScale = `crop=${cropW}:${cropH}:${xExpr}:0,scale=${job.resolution.width}:${job.resolution.height}:flags=lanczos`;
+  const cropScale = `crop=${cropW}:${cropH}:${xExpr}:0,scale=${job.resolution.width}:${scaledHeight}:flags=lanczos${padStep}`;
 
-  const filterScriptPath = join(tmpdir(), `clipper_filter_${randomUUID()}.txt`);
+  const filterScriptPath = join(tmpdir(), `shards_filter_${randomUUID()}.txt`);
   await writeFile(filterScriptPath, cropScale);
 
   // Step 1: Render with crop + scale
@@ -140,9 +172,7 @@ export async function renderClipWithReframe(job: {
     '-ss', String(job.start),
     '-t', String(duration),
     '-filter_script:v', filterScriptPath,
-    '-c:v', 'libx264',
-    '-preset', preset,
-    '-crf', String(crf),
+    ...encoderArgs,
     '-c:a', 'aac',
     '-b:a', '128k',
     '-movflags', '+faststart',
@@ -162,12 +192,12 @@ export async function renderClipWithReframe(job: {
 
     if (hasAssFilter) {
       // Burn in with ASS filter
-      const subFilterPath = join(tmpdir(), `clipper_sub_${randomUUID()}.txt`);
+      const subFilterPath = join(tmpdir(), `shards_sub_${randomUUID()}.txt`);
       await writeFile(subFilterPath, `ass=${job.subtitlePath.replace(/:/g, '\\:')}`);
       const subArgs = [
         '-y', '-i', step1Output,
         '-filter_script:v', subFilterPath,
-        '-c:v', 'libx264', '-preset', preset, '-crf', String(crf),
+        ...encoderArgs,
         '-c:a', 'copy', '-movflags', '+faststart', '-pix_fmt', 'yuv420p',
         job.outputPath,
       ];

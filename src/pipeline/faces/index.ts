@@ -44,7 +44,7 @@ export async function mapSpeakersToFaces(
   let tempDir: string | null = null;
 
   try {
-    tempDir = await mkdtemp(path.join(tmpdir(), 'clipper-map-'));
+    tempDir = await mkdtemp(path.join(tmpdir(), 'shards-map-'));
     const transcriptPath = path.join(tempDir, 'transcript.json');
     const facesPath = path.join(tempDir, 'faces.json');
 

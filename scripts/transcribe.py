@@ -39,8 +39,14 @@ def main():
             vad_filter=True,
         )
 
+        # `info.duration` is the total audio length faster-whisper computed
+        # after VAD. Use it as the denominator for live progress so the GUI
+        # has something to show while the generator is decoding.
+        total_duration = float(getattr(info, "duration", 0) or 0)
+
         log("Processing segments and detecting speakers...")
         segments = []
+        last_progress_emit = -1.0  # last segment-end we logged progress for
 
         for seg in whisper_segments:
             words = []
@@ -59,6 +65,12 @@ def main():
                 "speaker": "SPEAKER_0",
                 "words": words,
             })
+
+            # Emit progress at most every ~3s of decoded audio so the GUI's
+            # progress bar moves smoothly without flooding the stream.
+            if total_duration > 0 and seg.end - last_progress_emit >= 3.0:
+                log(f"  Transcribed {seg.end:.1f}s / {total_duration:.1f}s")
+                last_progress_emit = seg.end
 
         duration = segments[-1]["end"] if segments else 0
 

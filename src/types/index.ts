@@ -84,6 +84,11 @@ export interface ExportOptions {
   format: 'mp4' | 'mov' | 'webm';
   quality: 'high' | 'medium' | 'low';
   resolution: { width: number; height: number };
+  // 'fullscreen' fills the 9:16 frame edge-to-edge (current default).
+  // 'centered' shows a wider crop scaled into the middle half, with equal
+  // black bars on top and bottom — useful when the action needs more
+  // horizontal context than a pure 9:16 close-up gives.
+  videoFormat: 'fullscreen' | 'centered';
   withCaptions: boolean;
   captionStyle: CaptionStyle;
   includeMetadata: boolean;

@@ -4,7 +4,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
 
-echo "Setting up Python environment for Video Clipper..."
+echo "Setting up Python environment for Shards..."
 
 # Create venv if it doesn't exist
 if [ ! -d "$VENV_DIR" ]; then

@@ -322,7 +322,7 @@ export function buildASSHeader(
   ].join(',');
 
   return `[Script Info]
-Title: Video Clipper Captions
+Title: Shards Captions
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes

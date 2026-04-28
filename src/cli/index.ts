@@ -4,11 +4,62 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import path from 'path';
-import { access, readFile, writeFile, mkdir } from 'fs/promises';
+import readline from 'readline';
+import { access, readFile } from 'fs/promises';
 import { runPipeline } from '../pipeline/index.js';
 import { isPythonSetup, setupPython } from '../utils/python.js';
-import { DEFAULT_CAPTION_STYLE } from '../pipeline/captions/index.js';
-import type { PipelineConfig, CaptionStyle, ExportOptions } from '../types/index.js';
+import { applyTheme, CAPTION_THEME_IDS, type CaptionThemeId } from '../pipeline/captions/themes.js';
+import { loadConfig, saveConfig, configPath } from '../utils/config.js';
+import type { PipelineConfig } from '../types/index.js';
+
+// Auto-load .env at the project root so users only need to set
+// ANTHROPIC_API_KEY once — they don't have to re-export it every shell.
+async function loadDotEnv(): Promise<void> {
+  if (process.env.ANTHROPIC_API_KEY) return;
+  try {
+    const text = await readFile(path.resolve(process.cwd(), '.env'), 'utf-8');
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq === -1) continue;
+      const key = line.slice(0, eq).trim();
+      const val = line.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
+      if (!process.env[key]) process.env[key] = val;
+    }
+  } catch {
+    // No .env — fall back to config file / CLI flag / shell env.
+  }
+}
+
+async function promptVideoFormat(
+  defaultChoice: 'fullscreen' | 'centered',
+): Promise<'fullscreen' | 'centered'> {
+  // Bail out cleanly when stdin isn't a real terminal (piped/CI runs) so the
+  // pipeline doesn't hang forever waiting for a keystroke.
+  if (!process.stdin.isTTY) return defaultChoice;
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q: string) => new Promise<string>((resolve) => rl.question(q, resolve));
+
+  const defaultLabel = defaultChoice === 'centered' ? '2' : '1';
+
+  console.log('');
+  console.log(chalk.bold('  Select video format:'));
+  console.log(`    ${chalk.cyan('1)')} Fullscreen — video fills the entire 9:16 frame`);
+  console.log(`    ${chalk.cyan('2)')} Centered   — wider crop, half-height with black bars top and bottom`);
+
+  let choice: 'fullscreen' | 'centered' = defaultChoice;
+  while (true) {
+    const answer = (await ask(`  Choice [1/2] (default ${defaultLabel}): `)).trim();
+    if (answer === '') { choice = defaultChoice; break; }
+    if (answer === '1') { choice = 'fullscreen'; break; }
+    if (answer === '2') { choice = 'centered'; break; }
+    console.log(chalk.yellow('  Please enter 1 or 2.'));
+  }
+  rl.close();
+  return choice;
+}
 
 function parseIntOrDefault(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -20,57 +71,12 @@ function parseIntOrDefault(value: string | undefined, fallback: number): number 
   return parsed;
 }
 
-const CONFIG_DIR = path.join(process.cwd(), 'config');
-const CONFIG_PATH = path.join(CONFIG_DIR, 'clipper.json');
-
-interface CliConfig {
-  whisperModel: string;
-  language: string;
-  minClipDuration: number;
-  maxClipDuration: number;
-  maxClips: number;
-  faceSampleRate: number;
-  anthropicApiKey: string;
-  format: 'mp4' | 'mov' | 'webm';
-  quality: 'high' | 'medium' | 'low';
-  withCaptions: boolean;
-  captionStyle: CaptionStyle;
-}
-
-const DEFAULT_CONFIG: CliConfig = {
-  whisperModel: 'base',
-  language: 'en',
-  minClipDuration: 15,
-  maxClipDuration: 180,
-  maxClips: 20,
-  faceSampleRate: 2,
-  anthropicApiKey: '',
-  format: 'mp4',
-  quality: 'high',
-  withCaptions: true,
-  captionStyle: DEFAULT_CAPTION_STYLE,
-};
-
-async function loadConfig(): Promise<CliConfig> {
-  try {
-    const raw = await readFile(CONFIG_PATH, 'utf-8');
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
-  } catch {
-    return { ...DEFAULT_CONFIG };
-  }
-}
-
-async function saveConfig(config: CliConfig): Promise<void> {
-  await mkdir(CONFIG_DIR, { recursive: true });
-  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2));
-}
-
 const program = new Command();
 
 program
-  .name('clipper')
-  .description('AI-powered long-form video to viral short-form clip generator')
-  .version('1.0.0');
+  .name('shards-cli')
+  .description('Shards — scripted entry point for the AI viral clip generator (use `shards` for the TUI)')
+  .version('1.1.0');
 
 // === PROCESS COMMAND ===
 program
@@ -86,11 +92,16 @@ program
   .option('--no-captions', 'Disable caption overlay')
   .option('-q, --quality <level>', 'Export quality (high, medium, low)', '')
   .option('-f, --format <fmt>', 'Export format (mp4, mov, webm)', '')
+  .option('--video-format <kind>', 'Layout: fullscreen | centered (skips the prompt)')
+  .option('--caption-theme <id>', 'Caption theme: golden | matrix | cyberpunk | vhs | mono | sunset')
   .option('--api-key <key>', 'Anthropic API key (prefer ANTHROPIC_API_KEY env var)')
   .action(async (input: string, opts: Record<string, string | boolean>) => {
     const spinner = ora();
 
     try {
+      // Pull ANTHROPIC_API_KEY out of .env if it isn't already in the shell env.
+      await loadDotEnv();
+
       // Resolve input path
       const inputPath = path.resolve(input);
       try {
@@ -110,10 +121,17 @@ program
       }
       if (!apiKey) {
         console.error(chalk.red('Error: Anthropic API key required.'));
-        console.error(chalk.yellow('Set it via: clipper config --api-key YOUR_KEY'));
+        console.error(chalk.yellow('Set it via: shards-cli config --api-key YOUR_KEY'));
         console.error(chalk.yellow('Or: export ANTHROPIC_API_KEY=YOUR_KEY'));
         process.exit(1);
       }
+
+      // Ask which video framing the user wants for this run. We do this before
+      // any heavy setup so the pipeline knows the layout up front and can apply
+      // it uniformly across every clip. The saved default is shown as the
+      // suggested choice but the user can override per-run.
+      const videoFormat = (opts.videoFormat as 'fullscreen' | 'centered' | undefined)
+        ?? (await promptVideoFormat(config.videoFormat));
 
       // Check Python setup
       spinner.start('Checking Python dependencies...');
@@ -134,6 +152,13 @@ program
         : path.join(path.dirname(inputPath), `${inputName}_clips`);
       const outputDir = opts.output ? path.resolve(opts.output as string) : defaultOutput;
 
+      // Pick the active theme: per-run override wins, else the saved default.
+      const themeArg = opts.captionTheme as CaptionThemeId | undefined;
+      const captionTheme: CaptionThemeId = themeArg && CAPTION_THEME_IDS.includes(themeArg)
+        ? themeArg
+        : config.captionTheme;
+      const themedCaptionStyle = applyTheme(config.captionStyle, captionTheme);
+
       // Build pipeline config
       const pipelineConfig: PipelineConfig = {
         inputPath,
@@ -150,15 +175,24 @@ program
           format: ((opts.format as string) || config.format) as 'mp4' | 'mov' | 'webm',
           quality: ((opts.quality as string) || config.quality) as 'high' | 'medium' | 'low',
           resolution: { width: 1080, height: 1920 },
+          videoFormat,
           withCaptions: opts.captions !== false && config.withCaptions,
-          captionStyle: config.captionStyle,
+          captionStyle: themedCaptionStyle,
           includeMetadata: true,
         },
       };
 
+      // Persist this run's choices so subsequent runs (and `shards`) start
+      // with the same defaults.
+      await saveConfig({
+        ...config,
+        videoFormat,
+        captionTheme,
+      });
+
       // Print header
       console.log('');
-      console.log(chalk.bold.cyan('  Video Clipper'));
+      console.log(chalk.bold.green('  SHARDS'));
       console.log(chalk.gray('  AI-powered viral clip generator'));
       console.log('');
       console.log(chalk.white(`  Input:    ${inputPath}`));
@@ -166,6 +200,7 @@ program
       console.log(chalk.white(`  Model:    Whisper ${pipelineConfig.whisperModel}`));
       console.log(chalk.white(`  Clips:    ${pipelineConfig.minClipDuration}-${pipelineConfig.maxClipDuration}s, max ${pipelineConfig.maxClips}`));
       console.log(chalk.white(`  Quality:  ${pipelineConfig.exportOptions.quality}`));
+      console.log(chalk.white(`  Format:   ${videoFormat === 'centered' ? 'centered (half-height with black bars)' : 'fullscreen (fill 9:16)'}`));
       console.log(chalk.white(`  Captions: ${pipelineConfig.exportOptions.withCaptions ? 'yes' : 'no'}`));
       console.log('');
 
@@ -223,12 +258,14 @@ program
 // === CONFIG COMMAND ===
 program
   .command('config')
-  .description('View or update clipper configuration')
+  .description('View or update Shards configuration')
   .option('--api-key <key>', 'Set Anthropic API key')
   .option('--model <size>', 'Set default Whisper model')
   .option('--language <code>', 'Set default language')
   .option('--quality <level>', 'Set default quality (high/medium/low)')
   .option('--format <fmt>', 'Set default format (mp4/mov/webm)')
+  .option('--video-format <kind>', 'Set default video format (fullscreen/centered)')
+  .option('--caption-theme <id>', 'Set default caption theme (golden/matrix/cyberpunk/vhs/mono/sunset)')
   .option('--max-clips <n>', 'Set max clips per video')
   .option('--min-duration <sec>', 'Set minimum clip duration')
   .option('--max-duration <sec>', 'Set maximum clip duration')
@@ -244,7 +281,7 @@ program
     let changed = false;
 
     if (opts.apiKey) {
-      console.warn(chalk.yellow('Warning: API key will be stored in plaintext in config/clipper.json.'));
+      console.warn(chalk.yellow('Warning: API key will be stored in plaintext in ~/.shards/config.json.'));
       console.warn(chalk.yellow('Prefer: export ANTHROPIC_API_KEY=your_key'));
       config.anthropicApiKey = opts.apiKey as string; changed = true;
     }
@@ -252,6 +289,22 @@ program
     if (opts.language) { config.language = opts.language as string; changed = true; }
     if (opts.quality) { config.quality = opts.quality as 'high' | 'medium' | 'low'; changed = true; }
     if (opts.format) { config.format = opts.format as 'mp4' | 'mov' | 'webm'; changed = true; }
+    if (opts.videoFormat) {
+      const vf = opts.videoFormat as 'fullscreen' | 'centered';
+      if (vf !== 'fullscreen' && vf !== 'centered') {
+        console.error(chalk.red(`Invalid video format: ${vf}. Expected 'fullscreen' or 'centered'.`));
+        process.exit(1);
+      }
+      config.videoFormat = vf; changed = true;
+    }
+    if (opts.captionTheme) {
+      const ct = opts.captionTheme as CaptionThemeId;
+      if (!CAPTION_THEME_IDS.includes(ct)) {
+        console.error(chalk.red(`Invalid caption theme: ${ct}. Expected one of ${CAPTION_THEME_IDS.join(', ')}.`));
+        process.exit(1);
+      }
+      config.captionTheme = ct; changed = true;
+    }
     if (opts.maxClips) { config.maxClips = parseInt(opts.maxClips as string); changed = true; }
     if (opts.minDuration) { config.minClipDuration = parseInt(opts.minDuration as string); changed = true; }
     if (opts.maxDuration) { config.maxClipDuration = parseInt(opts.maxDuration as string); changed = true; }
@@ -271,6 +324,7 @@ program
     const display = { ...config, anthropicApiKey: config.anthropicApiKey ? '***set***' : '(not set)' };
     console.log('');
     console.log(chalk.bold('  Current Configuration:'));
+    console.log(chalk.gray(`  path: ${configPath()}`));
     console.log(chalk.gray('  ' + '-'.repeat(40)));
     for (const [key, value] of Object.entries(display)) {
       if (typeof value === 'object') {
