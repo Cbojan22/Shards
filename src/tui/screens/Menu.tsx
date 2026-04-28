@@ -6,7 +6,7 @@ import SelectInput from 'ink-select-input';
 import { Frame } from '../components/Frame.js';
 import { TUI } from '../theme.js';
 
-export type MenuChoice = 'run' | 'guide' | 'defaults' | 'quit';
+export type MenuChoice = 'run' | 'guide' | 'defaults' | 'preview' | 'quit';
 
 interface MenuItem {
   label: string;
@@ -14,15 +14,17 @@ interface MenuItem {
 }
 
 const ITEMS: MenuItem[] = [
-  { label: '> New clip run',     value: 'run' },
-  { label: '> Edit defaults',    value: 'defaults' },
-  { label: '> View quick guide', value: 'guide' },
-  { label: '> Quit',             value: 'quit' },
+  { label: '> New clip run',       value: 'run' },
+  { label: '> Edit defaults',      value: 'defaults' },
+  { label: '> Preview themes',     value: 'preview' },
+  { label: '> View quick guide',   value: 'guide' },
+  { label: '> Quit',               value: 'quit' },
 ];
 
 const HINTS: Record<MenuChoice, string> = {
   run:      'Pick a video, configure, and process',
   defaults: 'Adjust saved settings without running',
+  preview:  'Render an MP4 showing every caption theme burned in',
   guide:    'How SHARDS works, what you need',
   quit:     'Leave SHARDS',
 };

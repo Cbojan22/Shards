@@ -5,6 +5,7 @@ import { Menu, type MenuChoice } from './screens/Menu.js';
 import { Guide } from './screens/Guide.js';
 import { Wizard, type WizardAnswers, type WizardMode } from './screens/Wizard.js';
 import { Run } from './screens/Run.js';
+import { Preview } from './screens/Preview.js';
 import { TUI } from './theme.js';
 import {
   configPath,
@@ -17,6 +18,7 @@ type Screen =
   | { kind: 'splash' }
   | { kind: 'menu' }
   | { kind: 'guide' }
+  | { kind: 'preview' }
   | { kind: 'wizard'; mode: WizardMode }
   | { kind: 'run'; answers: WizardAnswers };
 
@@ -58,6 +60,7 @@ export function App({ initialApiKey }: AppProps): React.ReactElement {
     switch (choice) {
       case 'run':      return setScreen({ kind: 'wizard', mode: 'run' });
       case 'defaults': return setScreen({ kind: 'wizard', mode: 'defaults' });
+      case 'preview':  return setScreen({ kind: 'preview' });
       case 'guide':    return setScreen({ kind: 'guide' });
       case 'quit':     return exit();
     }
@@ -95,6 +98,9 @@ export function App({ initialApiKey }: AppProps): React.ReactElement {
 
     case 'guide':
       return <Guide onBack={() => setScreen({ kind: 'menu' })} />;
+
+    case 'preview':
+      return <Preview onDone={() => setScreen({ kind: 'menu' })} />;
 
     case 'wizard': {
       const initial = wizardInitialFromConfig(config);

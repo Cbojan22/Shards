@@ -9,6 +9,7 @@ import { access, readFile } from 'fs/promises';
 import { runPipeline } from '../pipeline/index.js';
 import { isPythonSetup, setupPython } from '../utils/python.js';
 import { applyTheme, CAPTION_THEME_IDS, type CaptionThemeId } from '../pipeline/captions/themes.js';
+import { generateThemesPreview, defaultPreviewPath } from '../pipeline/preview.js';
 import { loadConfig, saveConfig, configPath } from '../utils/config.js';
 import type { PipelineConfig } from '../types/index.js';
 
@@ -76,7 +77,7 @@ const program = new Command();
 program
   .name('shards-cli')
   .description('Shards — scripted entry point for the AI viral clip generator (use `shards` for the TUI)')
-  .version('1.1.0');
+  .version('1.2.0');
 
 // === PROCESS COMMAND ===
 program
@@ -337,6 +338,24 @@ program
       }
     }
     console.log('');
+  });
+
+// === PREVIEW COMMAND ===
+program
+  .command('preview')
+  .description('Render an MP4 walking through every caption theme')
+  .option('-o, --output <path>', 'Where to save the preview MP4 (default: iCloud/Snag)')
+  .action(async (opts: Record<string, string>) => {
+    const outPath = (opts.output as string) || defaultPreviewPath();
+    const spinner = ora('Generating themes preview…').start();
+    try {
+      await generateThemesPreview(outPath, (msg) => { spinner.text = msg; });
+      spinner.succeed(`Preview saved: ${outPath}`);
+    } catch (err) {
+      spinner.fail('Preview failed');
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
   });
 
 // === SETUP COMMAND ===

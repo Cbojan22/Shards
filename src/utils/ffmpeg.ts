@@ -247,7 +247,7 @@ async function checkFFmpegFilter(name: string): Promise<boolean> {
   });
 }
 
-function runFFmpeg(args: string[]): Promise<void> {
+export function runFFmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     let stderr = '';
