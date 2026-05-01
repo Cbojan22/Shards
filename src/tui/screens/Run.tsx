@@ -130,6 +130,9 @@ export function Run({ answers, baseConfig, apiKey, onDone }: RunProps): React.Re
           maxClips: answers.maxClips,
           faceSampleRate: baseConfig.faceSampleRate,
           anthropicApiKey: apiKey,
+          endPaddingSec: baseConfig.endPaddingSec,
+          softCapRatio: baseConfig.softCapRatio,
+          strictCompleteness: baseConfig.strictCompleteness,
           exportOptions: {
             outputDir,
             format: answers.format,

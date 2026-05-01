@@ -72,6 +72,16 @@ function parseIntOrDefault(value: string | undefined, fallback: number): number 
   return parsed;
 }
 
+function parseFloatOrDefault(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = parseFloat(value);
+  if (Number.isNaN(parsed)) {
+    console.error(`Invalid number: "${value}", using default: ${fallback}`);
+    return fallback;
+  }
+  return parsed;
+}
+
 const program = new Command();
 
 program
@@ -96,6 +106,9 @@ program
   .option('--video-format <kind>', 'Layout: fullscreen | centered (skips the prompt)')
   .option('--caption-theme <id>', 'Caption theme (run `shards-cli config --show` to list all 16)')
   .option('--api-key <key>', 'Anthropic API key (prefer ANTHROPIC_API_KEY env var)')
+  .option('--end-padding <sec>', 'Tail padding after each clip ending (default 0.6)')
+  .option('--soft-cap-ratio <ratio>', 'Hard ceiling = max-duration × ratio (default 1.5)')
+  .option('--no-strict-completeness', 'Keep clips Claude flagged as incomplete (default: drop them)')
   .action(async (input: string, opts: Record<string, string | boolean>) => {
     const spinner = ora();
 
@@ -171,6 +184,10 @@ program
         maxClips: parseIntOrDefault(opts.maxClips as string, config.maxClips),
         faceSampleRate: config.faceSampleRate,
         anthropicApiKey: apiKey,
+        endPaddingSec: parseFloatOrDefault(opts.endPadding as string, config.endPaddingSec),
+        softCapRatio: parseFloatOrDefault(opts.softCapRatio as string, config.softCapRatio),
+        // commander inverts --no-strict-completeness into opts.strictCompleteness === false
+        strictCompleteness: opts.strictCompleteness !== false && config.strictCompleteness,
         exportOptions: {
           outputDir,
           format: ((opts.format as string) || config.format) as 'mp4' | 'mov' | 'webm',
@@ -272,6 +289,9 @@ program
   .option('--max-clips <n>', 'Set max clips per video')
   .option('--min-duration <sec>', 'Set minimum clip duration')
   .option('--max-duration <sec>', 'Set maximum clip duration')
+  .option('--end-padding <sec>', 'Set tail padding (seconds) added after each clip ending')
+  .option('--soft-cap-ratio <ratio>', 'Set soft-cap multiplier on max-duration')
+  .option('--strict-completeness <bool>', 'Set strict completeness gate (true/false)')
   .option('--caption-font <name>', 'Set caption font family')
   .option('--caption-size <px>', 'Set caption font size')
   .option('--caption-color <hex>', 'Set primary caption color')
@@ -311,6 +331,16 @@ program
     if (opts.maxClips) { config.maxClips = parseInt(opts.maxClips as string); changed = true; }
     if (opts.minDuration) { config.minClipDuration = parseInt(opts.minDuration as string); changed = true; }
     if (opts.maxDuration) { config.maxClipDuration = parseInt(opts.maxDuration as string); changed = true; }
+    if (opts.endPadding) { config.endPaddingSec = parseFloat(opts.endPadding as string); changed = true; }
+    if (opts.softCapRatio) { config.softCapRatio = parseFloat(opts.softCapRatio as string); changed = true; }
+    if (opts.strictCompleteness !== undefined) {
+      const v = String(opts.strictCompleteness).toLowerCase();
+      if (v !== 'true' && v !== 'false') {
+        console.error(chalk.red(`Invalid --strict-completeness: ${v}. Expected true or false.`));
+        process.exit(1);
+      }
+      config.strictCompleteness = v === 'true'; changed = true;
+    }
     if (opts.captionFont) { config.captionStyle.fontFamily = opts.captionFont as string; changed = true; }
     if (opts.captionSize) { config.captionStyle.fontSize = parseInt(opts.captionSize as string); changed = true; }
     if (opts.captionColor) { config.captionStyle.primaryColor = opts.captionColor as string; changed = true; }

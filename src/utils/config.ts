@@ -23,6 +23,12 @@ export interface UserConfig {
   withCaptions: boolean;
   captionTheme: CaptionThemeId;
   captionStyle: CaptionStyle;
+  /** Seconds of tail padding added after each clip's snapped ending. */
+  endPaddingSec: number;
+  /** Hard ceiling = maxClipDuration * softCapRatio. */
+  softCapRatio: number;
+  /** Drop clips Claude flagged as incomplete (completeness_score<70 or ending_type "trail_off"). */
+  strictCompleteness: boolean;
 }
 
 export const DEFAULT_CONFIG: UserConfig = {
@@ -39,6 +45,9 @@ export const DEFAULT_CONFIG: UserConfig = {
   withCaptions: true,
   captionTheme: 'golden',
   captionStyle: DEFAULT_CAPTION_STYLE,
+  endPaddingSec: 0.6,
+  softCapRatio: 1.5,
+  strictCompleteness: true,
 };
 
 const CONFIG_DIR = process.env.SHARDS_CONFIG_DIR || path.join(homedir(), '.shards');

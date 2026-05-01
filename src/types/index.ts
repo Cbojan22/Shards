@@ -115,6 +115,12 @@ export interface PipelineConfig {
   faceSampleRate: number;
   anthropicApiKey: string;
   exportOptions: ExportOptions;
+  /** Seconds of breathing room added after each clip's snapped ending. Default 0.6. */
+  endPaddingSec?: number;
+  /** Hard ceiling = maxClipDuration * softCapRatio. Default 1.5. */
+  softCapRatio?: number;
+  /** When true, drop clips Claude flagged as incomplete or trail-off endings. Default true. */
+  strictCompleteness?: boolean;
 }
 
 export interface PipelineProgress {

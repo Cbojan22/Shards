@@ -68,6 +68,9 @@ export async function runPipeline(
       maxClips: config.maxClips,
       minDuration: config.minClipDuration,
       maxDuration: config.maxClipDuration,
+      endPaddingSec: config.endPaddingSec,
+      softCapRatio: config.softCapRatio,
+      strictCompleteness: config.strictCompleteness,
     },
     (msg) => progress('viral', msg)
   );
