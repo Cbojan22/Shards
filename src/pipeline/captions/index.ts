@@ -40,9 +40,18 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   outlineWidth: 5,
   shadowColor: '#000000',
   position: 'bottom',
-  wordsPerGroup: 2,
+  // Soft target: grouping respects phrase cohesion and width, so groups
+  // can grow past this when a phrase fits and shrink when punctuation
+  // suggests a clean break.
+  wordsPerGroup: 3,
   bold: true,
 };
+
+// Caption frame width matches the rendered ASS PlayResX (see buildASSHeader).
+const CAPTION_VIDEO_WIDTH = 1080;
+// Keep text inside ~82% of the frame so libass never wraps or clips on
+// narrower devices (status bars, rounded corners, share sheets).
+const SAFE_WIDTH_RATIO = 0.82;
 
 // ---------------------------------------------------------------------------
 // Emphasis detection
@@ -104,49 +113,229 @@ export function identifyEmphasisWords(words: string[]): Set<number> {
 // Word grouping
 // ---------------------------------------------------------------------------
 
-const PAUSE_THRESHOLD = 0.3; // seconds -- start new group if gap exceeds this
+const PAUSE_THRESHOLD = 0.35; // seconds -- start new group if gap exceeds this
+
+const NUMBER_MAGNITUDE = new Set([
+  'thousand', 'thousands', 'million', 'millions', 'billion', 'billions',
+  'trillion', 'trillions', 'hundred', 'hundreds', 'dozen', 'dozens',
+  'k', 'm', 'b', 'mil', 'bil',
+]);
+
+function strip(word: string): string {
+  return word.replace(/[.,!?;:'"()\[\]]+/g, '').toLowerCase();
+}
+
+function hasDigit(word: string): boolean {
+  return /\d/.test(word);
+}
+
+function isMagnitudeWord(word: string): boolean {
+  return NUMBER_MAGNITUDE.has(strip(word));
+}
 
 /**
- * Group consecutive words for display. Respects natural pauses and
- * the configured wordsPerGroup limit.
+ * True when `next` continues a numeric phrase started by `prev` and the
+ * pair must never be split across caption groups (e.g. "50" + ",000",
+ * "$5" + "million", "1" + "point" + "5").
+ */
+function isUnbreakablePair(prev: string, next: string): boolean {
+  // "50" + ",000" or "12" + ".5"
+  if (hasDigit(prev) && /^[,.]\d/.test(next)) return true;
+  // "50" + "thousand", "$5" + "million"
+  if ((hasDigit(prev) || /[$€£¥]$/.test(prev)) && isMagnitudeWord(next)) return true;
+  // "$" + "5"
+  if (/[$€£¥]$/.test(prev) && hasDigit(next)) return true;
+  // "five" + "hundred" + "thousand"
+  if (isMagnitudeWord(prev) && isMagnitudeWord(next)) return true;
+  // "1" + "point" + "5"
+  if (hasDigit(prev) && strip(next) === 'point') return true;
+  if (strip(prev) === 'point' && hasDigit(next)) return true;
+  return false;
+}
+
+/**
+ * Approximate rendered width of `text` in pixels for bold uppercase
+ * captions at the given font size. Tuned for Arial Black / Impact-class
+ * faces; conservative for narrower fonts. Used to decide how many words
+ * fit on one line without libass wrapping or clipping.
+ */
+function estimateTextWidth(text: string, fontSize: number): number {
+  const upper = text.toUpperCase();
+  let width = 0;
+  for (const ch of upper) {
+    if (ch === ' ') width += fontSize * 0.32;
+    else if (/[ILJ1!.,'":;|]/.test(ch)) width += fontSize * 0.32;
+    else if (/[MW]/.test(ch)) width += fontSize * 0.88;
+    else width += fontSize * 0.62;
+  }
+  return width;
+}
+
+// Words may carry an optional `speaker` tag attached upstream by
+// extractClipWords. Grouping breaks on speaker change when present and
+// silently ignores it when absent (preserving the public API).
+type MaybeSpeakerWord = WordTimestamp & { speaker?: string };
+
+interface AtomicChunk {
+  words: MaybeSpeakerWord[];
+  start: number;
+  end: number;
+  text: string;
+  speaker?: string;
+  endsSentence: boolean; // last word ends with .?! → hard break after
+  endsClause: boolean;   // last word ends with ,;:  → soft break after
+}
+
+/**
+ * Pre-pass that fuses runs of words which must be displayed together
+ * (numeric phrases, currency, decimals). Subsequent grouping treats each
+ * chunk as atomic.
+ */
+function buildAtomicChunks(words: MaybeSpeakerWord[]): AtomicChunk[] {
+  const chunks: AtomicChunk[] = [];
+  let cur: MaybeSpeakerWord[] = [];
+
+  for (const w of words) {
+    if (cur.length === 0) {
+      cur.push(w);
+      continue;
+    }
+    const prev = cur[cur.length - 1];
+    if (isUnbreakablePair(prev.word, w.word)) {
+      cur.push(w);
+    } else {
+      chunks.push(makeChunk(cur));
+      cur = [w];
+    }
+  }
+  if (cur.length > 0) chunks.push(makeChunk(cur));
+  return chunks;
+}
+
+function makeChunk(words: MaybeSpeakerWord[]): AtomicChunk {
+  const last = words[words.length - 1].word;
+  return {
+    words: [...words],
+    start: words[0].start,
+    end: words[words.length - 1].end,
+    text: words.map((w) => w.word).join(' '),
+    speaker: words[0].speaker,
+    endsSentence: /[.?!]$/.test(last),
+    endsClause: /[,;:]$/.test(last),
+  };
+}
+
+export interface GroupOptions {
+  /** Reserved soft hint; the new algorithm prioritises sentence cohesion
+   *  over a fixed word count, so this only nudges the soft clause-break
+   *  threshold. */
+  targetWordsPerGroup: number;
+  /** Font size used to estimate rendered text width. */
+  fontSize: number;
+  /** Frame width in pixels (matches ASS PlayResX). */
+  videoWidth?: number;
+  /** Override pause-break threshold in seconds. */
+  pauseThreshold?: number;
+}
+
+// Soft break point: when the current group's rendered width crosses this
+// fraction of the safe max AND the previous word ended a clause (,;:),
+// flush there so long sentences split on natural clause boundaries
+// instead of mid-phrase when width finally runs out.
+const SOFT_CLAUSE_WIDTH_RATIO = 0.7;
+
+/**
+ * Group consecutive words for display so each group reads as a complete
+ * thought. Breaks on, in priority order:
+ *  - sentence-ending punctuation (. ? !) — strongest signal
+ *  - speaker change (when speaker tags are present on the words)
+ *  - natural pause longer than `pauseThreshold`
+ *  - rendered width exceeding the safe frame width
+ *  - clause-ending punctuation (, ; :) once width is past ~70% of the cap
+ *
+ * Numeric phrases are pre-fused into atomic chunks so they're never
+ * split (see `buildAtomicChunks`). The `targetWordsPerGroup` field is
+ * kept for config compatibility but no longer caps group size.
  */
 export function groupWords(
-  words: WordTimestamp[],
-  wordsPerGroup: number,
+  words: WordTimestamp[] | MaybeSpeakerWord[],
+  options: GroupOptions | number,
 ): WordGroup[] {
   if (words.length === 0) return [];
 
+  // Backward-compat: callers used to pass a plain number.
+  const opts: GroupOptions =
+    typeof options === 'number'
+      ? { targetWordsPerGroup: options, fontSize: DEFAULT_CAPTION_STYLE.fontSize }
+      : options;
+
+  const pauseGap = opts.pauseThreshold ?? PAUSE_THRESHOLD;
+  const videoWidth = opts.videoWidth ?? CAPTION_VIDEO_WIDTH;
+  const maxWidth = videoWidth * SAFE_WIDTH_RATIO;
+
+  const chunks = buildAtomicChunks(words as MaybeSpeakerWord[]);
   const groups: WordGroup[] = [];
-  let currentWords: WordTimestamp[] = [];
 
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
+  let curChunks: AtomicChunk[] = [];
+  let curText = '';
+  let curSpeaker: string | undefined;
 
-    // Check for pause gap between previous word and this one
-    if (currentWords.length > 0) {
-      const prev = currentWords[currentWords.length - 1];
-      const gap = word.start - prev.end;
-      if (gap > PAUSE_THRESHOLD) {
-        // Flush current group because of a natural pause
-        groups.push(buildGroup(currentWords));
-        currentWords = [];
-      }
+  const flush = () => {
+    if (curChunks.length === 0) return;
+    const flat = curChunks.flatMap((c) => c.words);
+    groups.push(buildGroup(flat));
+    curChunks = [];
+    curText = '';
+    curSpeaker = undefined;
+  };
+
+  for (const chunk of chunks) {
+    if (curChunks.length === 0) {
+      curChunks.push(chunk);
+      curText = chunk.text;
+      curSpeaker = chunk.speaker;
+      continue;
     }
 
-    currentWords.push(word);
+    const prevChunk = curChunks[curChunks.length - 1];
+    const gap = chunk.start - prevChunk.end;
+    const tentativeText = `${curText} ${chunk.text}`;
+    const tentativeWidth = estimateTextWidth(tentativeText, opts.fontSize);
 
-    // Flush when we hit the group size limit
-    if (currentWords.length >= wordsPerGroup) {
-      groups.push(buildGroup(currentWords));
-      currentWords = [];
+    // Strong reasons to start a new caption right here.
+    const sentenceEnded = prevChunk.endsSentence;
+    const speakerChanged =
+      curSpeaker !== undefined &&
+      chunk.speaker !== undefined &&
+      chunk.speaker !== curSpeaker;
+    const longPause = gap > pauseGap;
+    const widthOverflow = tentativeWidth > maxWidth;
+
+    // Soft fallback: if the previous chunk ended a clause and we're
+    // close to width cap, break here rather than waiting to overflow
+    // mid-phrase.
+    const softClauseBreak =
+      prevChunk.endsClause && tentativeWidth > maxWidth * SOFT_CLAUSE_WIDTH_RATIO;
+
+    const shouldFlush =
+      sentenceEnded ||
+      speakerChanged ||
+      longPause ||
+      widthOverflow ||
+      softClauseBreak;
+
+    if (shouldFlush) {
+      flush();
+      curChunks.push(chunk);
+      curText = chunk.text;
+      curSpeaker = chunk.speaker;
+    } else {
+      curChunks.push(chunk);
+      curText = tentativeText;
     }
   }
 
-  // Flush remaining words
-  if (currentWords.length > 0) {
-    groups.push(buildGroup(currentWords));
-  }
-
+  flush();
   return groups;
 }
 
@@ -396,8 +585,8 @@ function extractClipWords(
   transcript: TranscriptResult,
   clipStart: number,
   clipEnd: number,
-): WordTimestamp[] {
-  const result: WordTimestamp[] = [];
+): MaybeSpeakerWord[] {
+  const result: MaybeSpeakerWord[] = [];
 
   for (const segment of transcript.segments) {
     // Skip segments entirely outside the clip range
@@ -406,7 +595,9 @@ function extractClipWords(
     for (const w of segment.words) {
       // Word must overlap with the clip window
       if (w.end > clipStart && w.start < clipEnd) {
-        result.push(w);
+        // Tag with segment speaker so groupWords can break on
+        // speaker change between consecutive utterances.
+        result.push({ ...w, speaker: segment.speaker });
       }
     }
   }
@@ -448,7 +639,10 @@ export async function generateCaptions(
   }
 
   // 2. Group words
-  const groups = groupWords(words, style.wordsPerGroup);
+  const groups = groupWords(words, {
+    targetWordsPerGroup: style.wordsPerGroup,
+    fontSize: style.fontSize,
+  });
 
   // 3. Build ASS events with timing relative to clip start
   const events: ASSEvent[] = [];
