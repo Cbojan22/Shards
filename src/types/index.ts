@@ -128,3 +128,18 @@ export interface PipelineProgress {
   progress: number;
   message: string;
 }
+
+/**
+ * Inputs for the caption-only flow. Used by both the CLI subcommand and the
+ * TUI's caption-only run screen. Captures everything needed to transcribe an
+ * already-finished short-form clip and burn captions onto it — no Anthropic
+ * API, no face detection, no reframing.
+ */
+export interface CaptionOnlyOptions {
+  inputPath: string;
+  outputPath: string;
+  whisperModel: string;
+  language: string;
+  quality: 'high' | 'medium' | 'low';
+  captionStyle: CaptionStyle;
+}

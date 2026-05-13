@@ -10,8 +10,9 @@ import { runPipeline } from '../pipeline/index.js';
 import { isPythonSetup, setupPython } from '../utils/python.js';
 import { applyTheme, CAPTION_THEME_IDS, type CaptionThemeId } from '../pipeline/captions/themes.js';
 import { generateThemesPreview, defaultPreviewPath } from '../pipeline/preview.js';
+import { captionExistingClip } from '../pipeline/captionOnly/index.js';
 import { loadConfig, saveConfig, configPath } from '../utils/config.js';
-import type { PipelineConfig } from '../types/index.js';
+import type { PipelineConfig, CaptionOnlyOptions } from '../types/index.js';
 
 // Auto-load .env at the project root so users only need to set
 // ANTHROPIC_API_KEY once — they don't have to re-export it every shell.
@@ -87,7 +88,7 @@ const program = new Command();
 program
   .name('shards-cli')
   .description('Shards — scripted entry point for the AI viral clip generator (use `shards` for the TUI)')
-  .version('1.4.0');
+  .version('1.5.0');
 
 // === PROCESS COMMAND ===
 program
@@ -370,6 +371,126 @@ program
       }
     }
     console.log('');
+  });
+
+// === CAPTION COMMAND ===
+program
+  .command('caption')
+  .description('Burn captions onto an existing short-form clip (no Anthropic API, free)')
+  .argument('<input>', 'Path to an MP4 clip you already have')
+  .option('-o, --output <path>', 'Output file path (default: <input>_captioned.mp4 next to source)')
+  .option('-m, --model <size>', 'Whisper model (tiny, base, small, medium, large)', '')
+  .option('-l, --language <code>', 'Language code', '')
+  .option('-q, --quality <level>', 'Render quality (high, medium, low)', '')
+  .option('--theme <id>', 'Caption theme (see `shards-cli config --show`)')
+  .option('--position <pos>', 'Caption position (top, center, bottom)')
+  .option('--font-size <px>', 'Caption font size override (24–240)')
+  .option('--words-per-group <n>', 'Words shown per caption (1–5, soft target)')
+  .action(async (input: string, opts: Record<string, string>) => {
+    const spinner = ora();
+    try {
+      const inputPath = path.resolve(input);
+      try {
+        await access(inputPath);
+      } catch {
+        console.error(chalk.red(`Error: Input file not found: ${inputPath}`));
+        process.exit(1);
+      }
+
+      const config = await loadConfig();
+
+      // Default output: <inputDir>/<basename>_captioned.mp4
+      const inputDir = path.dirname(inputPath);
+      const inputBase = path.basename(inputPath, path.extname(inputPath));
+      const outputPath = opts.output
+        ? path.resolve(opts.output)
+        : path.join(inputDir, `${inputBase}_captioned.mp4`);
+
+      // Resolve theme
+      const themeArg = opts.theme as CaptionThemeId | undefined;
+      const captionTheme: CaptionThemeId = themeArg && CAPTION_THEME_IDS.includes(themeArg)
+        ? themeArg
+        : config.captionTheme;
+      if (themeArg && !CAPTION_THEME_IDS.includes(themeArg)) {
+        console.warn(chalk.yellow(`Unknown theme "${themeArg}", falling back to "${config.captionTheme}".`));
+      }
+
+      // Build base caption style with per-run overrides on position + font size
+      const baseStyle = { ...config.captionStyle };
+      if (opts.position) {
+        const p = opts.position as 'top' | 'center' | 'bottom';
+        if (p !== 'top' && p !== 'center' && p !== 'bottom') {
+          console.error(chalk.red(`Invalid --position: ${p}. Expected top|center|bottom.`));
+          process.exit(1);
+        }
+        baseStyle.position = p;
+      }
+      if (opts.fontSize) {
+        const n = parseInt(opts.fontSize, 10);
+        if (Number.isNaN(n) || n < 24 || n > 240) {
+          console.error(chalk.red(`Invalid --font-size: ${opts.fontSize}. Expected 24–240.`));
+          process.exit(1);
+        }
+        baseStyle.fontSize = n;
+      }
+      if (opts.wordsPerGroup) {
+        const n = parseInt(opts.wordsPerGroup, 10);
+        if (Number.isNaN(n) || n < 1 || n > 5) {
+          console.error(chalk.red(`Invalid --words-per-group: ${opts.wordsPerGroup}. Expected 1–5.`));
+          process.exit(1);
+        }
+        baseStyle.wordsPerGroup = n;
+      }
+      const captionStyle = applyTheme(baseStyle, captionTheme);
+
+      // Ensure the Python venv is ready (Whisper needs it).
+      spinner.start('Checking Python environment…');
+      if (!(await isPythonSetup())) {
+        spinner.text = 'Setting up Python venv (first run, ~1 min)…';
+        await setupPython();
+      }
+      spinner.succeed('Python environment ready');
+
+      // Persist the theme choice (consistent with `process`).
+      await saveConfig({ ...config, captionTheme });
+
+      const options: CaptionOnlyOptions = {
+        inputPath,
+        outputPath,
+        whisperModel: (opts.model as string) || config.whisperModel,
+        language: (opts.language as string) || config.language,
+        quality: ((opts.quality as string) || config.quality) as 'high' | 'medium' | 'low',
+        captionStyle,
+      };
+
+      console.log('');
+      console.log(chalk.bold.green('  SHARDS // caption'));
+      console.log(chalk.white(`  Input:    ${options.inputPath}`));
+      console.log(chalk.white(`  Output:   ${options.outputPath}`));
+      console.log(chalk.white(`  Model:    Whisper ${options.whisperModel}`));
+      console.log(chalk.white(`  Theme:    ${captionTheme} @ ${captionStyle.position}`));
+      console.log('');
+
+      const start = Date.now();
+      const result = await captionExistingClip(options, (stage, message) => {
+        const colorFn = stage === 'complete' ? chalk.bold.green : chalk.cyan;
+        console.log(`  ${chalk.gray(`[${stage}]`)} ${colorFn(message)}`);
+      });
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+
+      console.log('');
+      console.log(chalk.bold.green('  Captioning complete!'));
+      console.log(chalk.white(`  Time: ${elapsed}s`));
+      console.log(chalk.white(`  Wrote: ${result.outputPath}`));
+      if (!result.usedAssFilter) {
+        console.log(chalk.yellow('  Note: libass missing — soft mov_text track instead of burned-in. Social uploads usually strip these.'));
+      }
+      console.log('');
+    } catch (err) {
+      spinner.fail('Captioning failed');
+      console.error(chalk.red(`\nError: ${err instanceof Error ? err.message : String(err)}`));
+      process.exit(1);
+    }
   });
 
 // === PREVIEW COMMAND ===
