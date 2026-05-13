@@ -114,6 +114,15 @@ describe('captionExistingClip', () => {
     const { transcribeVideo } = await import('../src/pipeline/transcribe/index.js');
     const { burnCaptions } = await import('../src/utils/ffmpeg.js');
 
+    // The orchestrator cleans up the temp ASS in a `finally` after burnCaptions
+    // returns, so we capture its contents inside the mock while the file still
+    // exists on disk.
+    let capturedAss = '';
+    (burnCaptions as ReturnType<typeof vi.fn>).mockImplementationOnce(async (args: { subtitlePath: string }) => {
+      capturedAss = await readFile(args.subtitlePath, 'utf-8');
+      return { usedAssFilter: true };
+    });
+
     const dir = await mkdtemp(path.join(tmpdir(), 'shards-cap-'));
     try {
       const result = await captionExistingClip({
@@ -136,9 +145,8 @@ describe('captionExistingClip', () => {
       expect(burnArgs.outputPath).toBe(path.join(dir, 'clip_captioned.mp4'));
       expect(burnArgs.subtitlePath.endsWith('.ass')).toBe(true);
 
-      // The generated ASS file should actually exist and contain our words.
-      const ass = await readFile(burnArgs.subtitlePath, 'utf-8');
-      expect(ass).toContain('HELLO WORLD');
+      // The ASS file produced by generateCaptions should contain our words.
+      expect(capturedAss).toContain('HELLO WORLD');
 
       expect(result.outputPath).toBe(path.join(dir, 'clip_captioned.mp4'));
       expect(result.usedAssFilter).toBe(true);

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import path from 'path';
 import { access } from 'fs/promises';
 import { Box, Text, useInput } from 'ink';

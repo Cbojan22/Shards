@@ -1,6 +1,7 @@
 import path from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { unlink } from 'fs/promises';
 import type { CaptionOnlyOptions } from '../../types/index.js';
 import { transcribeVideo } from '../transcribe/index.js';
 import { generateCaptions } from '../captions/index.js';
@@ -54,12 +55,19 @@ export async function captionExistingClip(
   );
 
   progress('render', 'Burning captions with FFmpeg…');
-  const { usedAssFilter } = await burnCaptions({
-    inputPath: opts.inputPath,
-    subtitlePath: assPath,
-    outputPath: opts.outputPath,
-    quality: opts.quality,
-  });
+  let usedAssFilter: boolean;
+  try {
+    ({ usedAssFilter } = await burnCaptions({
+      inputPath: opts.inputPath,
+      subtitlePath: assPath,
+      outputPath: opts.outputPath,
+      quality: opts.quality,
+    }));
+  } finally {
+    // ASS files live in the OS temp dir; clean up so repeated runs don't
+    // accumulate cleartext transcripts there.
+    await unlink(assPath).catch(() => {});
+  }
 
   if (!usedAssFilter) {
     progress('render', 'WARNING: libass not available — embedded soft subs instead of burning. Most social uploads will strip these.');
