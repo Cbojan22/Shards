@@ -6,6 +6,8 @@ import { Guide } from './screens/Guide.js';
 import { Wizard, type WizardAnswers, type WizardMode } from './screens/Wizard.js';
 import { Run } from './screens/Run.js';
 import { Preview } from './screens/Preview.js';
+import { CaptionWizard, type CaptionWizardAnswers } from './screens/CaptionWizard.js';
+import { CaptionRun } from './screens/CaptionRun.js';
 import { TUI } from './theme.js';
 import {
   configPath,
@@ -20,7 +22,9 @@ type Screen =
   | { kind: 'guide' }
   | { kind: 'preview' }
   | { kind: 'wizard'; mode: WizardMode }
-  | { kind: 'run'; answers: WizardAnswers };
+  | { kind: 'run'; answers: WizardAnswers }
+  | { kind: 'captionWizard' }
+  | { kind: 'captionRun'; answers: CaptionWizardAnswers };
 
 interface AppProps {
   initialApiKey: string;
@@ -59,6 +63,7 @@ export function App({ initialApiKey }: AppProps): React.ReactElement {
   const handleMenu = (choice: MenuChoice) => {
     switch (choice) {
       case 'run':      return setScreen({ kind: 'wizard', mode: 'run' });
+      case 'caption':  return setScreen({ kind: 'captionWizard' });
       case 'defaults': return setScreen({ kind: 'wizard', mode: 'defaults' });
       case 'preview':  return setScreen({ kind: 'preview' });
       case 'guide':    return setScreen({ kind: 'guide' });
@@ -131,6 +136,40 @@ export function App({ initialApiKey }: AppProps): React.ReactElement {
           answers={screen.answers}
           baseConfig={config}
           apiKey={apiKey}
+          onDone={() => setScreen({ kind: 'menu' })}
+        />
+      );
+
+    case 'captionWizard': {
+      const initial: CaptionWizardAnswers = {
+        inputPath: '',
+        outputPath: '',
+        captionTheme: config.captionTheme,
+        captionPosition: config.captionStyle.position,
+      };
+      return (
+        <CaptionWizard
+          initial={initial}
+          onCancel={() => setScreen({ kind: 'menu' })}
+          onSubmit={async (answers) => {
+            // Persist theme + position so subsequent runs default to them.
+            const merged: UserConfig = {
+              ...config,
+              captionTheme: answers.captionTheme,
+              captionStyle: { ...config.captionStyle, position: answers.captionPosition },
+            };
+            await persist(merged);
+            setScreen({ kind: 'captionRun', answers });
+          }}
+        />
+      );
+    }
+
+    case 'captionRun':
+      return (
+        <CaptionRun
+          answers={screen.answers}
+          baseConfig={config}
           onDone={() => setScreen({ kind: 'menu' })}
         />
       );
