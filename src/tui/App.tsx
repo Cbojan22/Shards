@@ -146,17 +146,24 @@ export function App({ initialApiKey }: AppProps): React.ReactElement {
         outputPath: '',
         captionTheme: config.captionTheme,
         captionPosition: config.captionStyle.position,
+        captionFontSize: config.captionStyle.fontSize,
+        captionWordsPerGroup: config.captionStyle.wordsPerGroup,
       };
       return (
         <CaptionWizard
           initial={initial}
           onCancel={() => setScreen({ kind: 'menu' })}
           onSubmit={async (answers) => {
-            // Persist theme + position so subsequent runs default to them.
+            // Persist theme + style tweaks so subsequent runs default to them.
             const merged: UserConfig = {
               ...config,
               captionTheme: answers.captionTheme,
-              captionStyle: { ...config.captionStyle, position: answers.captionPosition },
+              captionStyle: {
+                ...config.captionStyle,
+                position: answers.captionPosition,
+                fontSize: answers.captionFontSize,
+                wordsPerGroup: answers.captionWordsPerGroup,
+              },
             };
             await persist(merged);
             setScreen({ kind: 'captionRun', answers });

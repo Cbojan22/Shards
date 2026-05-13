@@ -81,7 +81,12 @@ export function CaptionRun({ answers, baseConfig, onDone }: CaptionRunProps): Re
         append('ready', 'Python ready, starting caption pass');
 
         const captionStyle = applyTheme(
-          { ...baseConfig.captionStyle, position: answers.captionPosition },
+          {
+            ...baseConfig.captionStyle,
+            position: answers.captionPosition,
+            fontSize: answers.captionFontSize,
+            wordsPerGroup: answers.captionWordsPerGroup,
+          },
           answers.captionTheme,
         );
 

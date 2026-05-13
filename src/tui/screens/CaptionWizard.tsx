@@ -21,6 +21,8 @@ export interface CaptionWizardAnswers {
   outputPath: string;       // '' means: derive at run time
   captionTheme: CaptionThemeId;
   captionPosition: 'top' | 'center' | 'bottom';
+  captionFontSize: number;
+  captionWordsPerGroup: number;
 }
 
 interface CaptionWizardProps {
@@ -29,8 +31,13 @@ interface CaptionWizardProps {
   onSubmit: (answers: CaptionWizardAnswers) => void;
 }
 
-type StepKey = 'inputPath' | 'theme' | 'position' | 'confirm';
-const STEPS: StepKey[] = ['inputPath', 'theme', 'position', 'confirm'];
+type StepKey = 'inputPath' | 'theme' | 'position' | 'fontSize' | 'wordsPerGroup' | 'confirm';
+const STEPS: StepKey[] = ['inputPath', 'theme', 'position', 'fontSize', 'wordsPerGroup', 'confirm'];
+
+const FONT_SIZE_MIN = 24;
+const FONT_SIZE_MAX = 240;
+const WORDS_PER_GROUP_MIN = 1;
+const WORDS_PER_GROUP_MAX = 5;
 
 export function CaptionWizard({ initial, onCancel, onSubmit }: CaptionWizardProps): React.ReactElement {
   const [answers, setAnswers] = useState<CaptionWizardAnswers>(initial);
@@ -64,6 +71,8 @@ export function CaptionWizard({ initial, onCancel, onSubmit }: CaptionWizardProp
       {STEPS[step] === 'inputPath' && <PathStep answers={answers} update={update} advance={advance} error={error} setError={setError} />}
       {STEPS[step] === 'theme' && <ThemeStep answers={answers} update={update} advance={advance} />}
       {STEPS[step] === 'position' && <PositionStep answers={answers} update={update} advance={advance} />}
+      {STEPS[step] === 'fontSize' && <FontSizeStep answers={answers} update={update} advance={advance} error={error} setError={setError} />}
+      {STEPS[step] === 'wordsPerGroup' && <WordsPerGroupStep answers={answers} update={update} advance={advance} error={error} setError={setError} />}
       {STEPS[step] === 'confirm' && <ConfirmStep answers={answers} onSubmit={onSubmit} advance={advance} />}
 
       <Box marginTop={1}>
@@ -168,13 +177,71 @@ function PositionStep({ answers, update, advance }: StepProps) {
   );
 }
 
+function FontSizeStep({ answers, update, advance, error, setError }: StepProps) {
+  const [value, setValue] = useState(String(answers.captionFontSize));
+  const onSubmit = (raw: string) => {
+    const n = parseInt(raw.trim(), 10);
+    if (Number.isNaN(n)) { setError?.('Enter a whole number.'); return; }
+    if (n < FONT_SIZE_MIN || n > FONT_SIZE_MAX) {
+      setError?.(`Must be between ${FONT_SIZE_MIN} and ${FONT_SIZE_MAX}.`);
+      return;
+    }
+    update('captionFontSize', n);
+    advance();
+  };
+  return (
+    <Frame title="caption font size" subtitle="larger = more screen real estate, easier to read on mobile">
+      <Box>
+        <Text color={TUI.primary}>{'> '}</Text>
+        <TextInput value={value} onChange={setValue} onSubmit={onSubmit} />
+      </Box>
+      <Box marginTop={1}>
+        <Text color={TUI.dim}>range: {FONT_SIZE_MIN}–{FONT_SIZE_MAX} · default 104</Text>
+      </Box>
+      {error && (
+        <Box marginTop={1}><Text color={TUI.error}>{error}</Text></Box>
+      )}
+    </Frame>
+  );
+}
+
+function WordsPerGroupStep({ answers, update, advance, error, setError }: StepProps) {
+  const [value, setValue] = useState(String(answers.captionWordsPerGroup));
+  const onSubmit = (raw: string) => {
+    const n = parseInt(raw.trim(), 10);
+    if (Number.isNaN(n)) { setError?.('Enter a whole number.'); return; }
+    if (n < WORDS_PER_GROUP_MIN || n > WORDS_PER_GROUP_MAX) {
+      setError?.(`Must be between ${WORDS_PER_GROUP_MIN} and ${WORDS_PER_GROUP_MAX}.`);
+      return;
+    }
+    update('captionWordsPerGroup', n);
+    advance();
+  };
+  return (
+    <Frame title="words per caption" subtitle="soft target — phrase cohesion can grow groups when the line fits">
+      <Box>
+        <Text color={TUI.primary}>{'> '}</Text>
+        <TextInput value={value} onChange={setValue} onSubmit={onSubmit} />
+      </Box>
+      <Box marginTop={1}>
+        <Text color={TUI.dim}>range: {WORDS_PER_GROUP_MIN}–{WORDS_PER_GROUP_MAX} · default 3</Text>
+      </Box>
+      {error && (
+        <Box marginTop={1}><Text color={TUI.error}>{error}</Text></Box>
+      )}
+    </Frame>
+  );
+}
+
 function ConfirmStep({ answers, onSubmit, advance }: { answers: CaptionWizardAnswers; onSubmit: (a: CaptionWizardAnswers) => void; advance: () => void; }) {
   const defaultOut = useMemo(() => deriveDefaultOutput(answers.inputPath), [answers.inputPath]);
   const rows: Array<[string, string]> = [
-    ['input',    answers.inputPath],
-    ['output',   answers.outputPath || defaultOut],
-    ['theme',    answers.captionTheme],
-    ['position', answers.captionPosition],
+    ['input',     answers.inputPath],
+    ['output',    answers.outputPath || defaultOut],
+    ['theme',     answers.captionTheme],
+    ['position',  answers.captionPosition],
+    ['font size', String(answers.captionFontSize)],
+    ['words/cap', String(answers.captionWordsPerGroup)],
   ];
   const labelWidth = Math.max(...rows.map(([k]) => k.length));
   return (

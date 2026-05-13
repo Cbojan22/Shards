@@ -384,7 +384,8 @@ program
   .option('-q, --quality <level>', 'Render quality (high, medium, low)', '')
   .option('--theme <id>', 'Caption theme (see `shards-cli config --show`)')
   .option('--position <pos>', 'Caption position (top, center, bottom)')
-  .option('--font-size <px>', 'Caption font size override')
+  .option('--font-size <px>', 'Caption font size override (24–240)')
+  .option('--words-per-group <n>', 'Words shown per caption (1–5, soft target)')
   .action(async (input: string, opts: Record<string, string>) => {
     const spinner = ora();
     try {
@@ -431,6 +432,14 @@ program
           process.exit(1);
         }
         baseStyle.fontSize = n;
+      }
+      if (opts.wordsPerGroup) {
+        const n = parseInt(opts.wordsPerGroup, 10);
+        if (Number.isNaN(n) || n < 1 || n > 5) {
+          console.error(chalk.red(`Invalid --words-per-group: ${opts.wordsPerGroup}. Expected 1–5.`));
+          process.exit(1);
+        }
+        baseStyle.wordsPerGroup = n;
       }
       const captionStyle = applyTheme(baseStyle, captionTheme);
 
