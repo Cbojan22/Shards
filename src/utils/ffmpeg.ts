@@ -271,6 +271,81 @@ export function runFFmpeg(args: string[]): Promise<void> {
   });
 }
 
+export interface BuildBurnCaptionsArgsParams {
+  inputPath: string;
+  subtitlePath: string;
+  outputPath: string;
+  quality: 'high' | 'medium' | 'low';
+  platform: NodeJS.Platform;
+  useAssFilter: boolean;
+}
+
+/**
+ * Build the ffmpeg argv that burns (or embeds) captions onto an existing clip
+ * without cropping, scaling, or otherwise touching the picture geometry. Pure
+ * function so we can unit-test platform + filter branching without spawning
+ * ffmpeg.
+ */
+export function buildBurnCaptionsArgs(p: BuildBurnCaptionsArgsParams): string[] {
+  const { crf, preset, vtBitrate } = getQualityPreset(p.quality);
+  const encoder = p.platform === 'darwin'
+    ? ['-c:v', 'h264_videotoolbox', '-b:v', vtBitrate]
+    : ['-c:v', 'libx264', '-preset', preset, '-crf', String(crf)];
+
+  if (p.useAssFilter) {
+    // libass: colons inside the filter graph must be escaped with `\:`
+    const escapedSub = p.subtitlePath.replace(/:/g, '\\:');
+    return [
+      '-y',
+      '-i', p.inputPath,
+      '-vf', `ass=${escapedSub}`,
+      ...encoder,
+      '-c:a', 'copy',
+      '-movflags', '+faststart',
+      '-pix_fmt', 'yuv420p',
+      p.outputPath,
+    ];
+  }
+
+  // Fallback: embed as a soft subtitle track. Player must support mov_text
+  // for it to render; most social platforms strip it on upload, so we warn
+  // upstream when we take this branch.
+  return [
+    '-y',
+    '-i', p.inputPath,
+    '-i', p.subtitlePath,
+    '-c:v', 'copy',
+    '-c:a', 'copy',
+    '-c:s', 'mov_text',
+    '-movflags', '+faststart',
+    p.outputPath,
+  ];
+}
+
+/**
+ * Burn an ASS subtitle file onto an existing video. Tries the libass `ass`
+ * filter first; if unavailable, falls back to embedding `mov_text`. Returns
+ * a flag indicating which branch was taken so callers can warn the user.
+ */
+export async function burnCaptions(opts: {
+  inputPath: string;
+  subtitlePath: string;
+  outputPath: string;
+  quality: 'high' | 'medium' | 'low';
+}): Promise<{ usedAssFilter: boolean }> {
+  const hasAss = await checkFFmpegFilter('ass');
+  const args = buildBurnCaptionsArgs({
+    inputPath: opts.inputPath,
+    subtitlePath: opts.subtitlePath,
+    outputPath: opts.outputPath,
+    quality: opts.quality,
+    platform: process.platform,
+    useAssFilter: hasAss,
+  });
+  await runFFmpeg(args);
+  return { usedAssFilter: hasAss };
+}
+
 function buildCropExpression(
   keyframes: Array<{ time: number; x: number; y: number; w: number; h: number }>,
   axis: 'x' | 'y'
