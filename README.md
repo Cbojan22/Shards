@@ -135,6 +135,21 @@ shards-cli process /path/to/video.mp4 \
 | `-m, --model <size>` | small | Whisper model |
 | `-l, --language <code>` | en | Language code |
 
+### Caption an existing clip (free, no API)
+
+Already have a short-form clip and just want Shards-style captions on it? Skip the full pipeline:
+
+```bash
+# CLI
+shards-cli caption /path/to/clip.mp4 --theme matrix --position bottom
+
+# TUI
+shards
+# → Caption existing clip
+```
+
+This path uses local Whisper + FFmpeg only — no Anthropic API key required. Output defaults to `<input>_captioned.mp4` next to the source.
+
 ### Configure defaults
 
 Both `shards` (via "Edit defaults") and `shards-cli config` read and write the same file at `~/.shards/config.json`.
