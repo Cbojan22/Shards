@@ -97,7 +97,7 @@ const program = new Command();
 program
   .name('shards-cli')
   .description('Shards — scripted entry point for the AI viral clip generator (use `shards` for the TUI)')
-  .version('1.5.0');
+  .version('1.6.0');
 
 // === PROCESS COMMAND ===
 program

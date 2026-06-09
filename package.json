@@ -1,6 +1,6 @@
 {
   "name": "shards",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Shards — AI-powered long-form video to viral short-form clip generator with a retro TUI",
   "type": "module",
   "main": "dist/tui/index.js",
