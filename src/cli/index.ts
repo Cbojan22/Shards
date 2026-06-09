@@ -83,6 +83,15 @@ function parseFloatOrDefault(value: string | undefined, fallback: number): numbe
   return parsed;
 }
 
+// "HH:MM:SS" for the analyze-only rankings printout — full precision lives in
+// viral_moments.json; the console just needs to be scannable.
+function formatClock(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
+}
+
 const program = new Command();
 
 program
@@ -110,6 +119,10 @@ program
   .option('--end-padding <sec>', 'Tail padding after each clip ending (default 0.6)')
   .option('--soft-cap-ratio <ratio>', 'Hard ceiling = max-duration × ratio (default 1.5)')
   .option('--no-strict-completeness', 'Keep clips Claude flagged as incomplete (default: drop them)')
+  .option('--no-identity-tracking', 'Disable MTCNN + identity-embedding tracker (fall back to Haar). Default: enabled.')
+  .option('--debug-tracking', 'Write a <clip>_tracking.json sidecar per clip with per-keyframe scoring')
+  .option('--no-resume', 'Ignore any cached transcript/face data in the output dir and recompute from scratch')
+  .option('--analyze-only', 'Find viral moments and write viral_moments.json with timestamps — no face tracking, no rendering')
   .action(async (input: string, opts: Record<string, string | boolean>) => {
     const spinner = ora();
 
@@ -141,12 +154,17 @@ program
         process.exit(1);
       }
 
+      const analyzeOnly = opts.analyzeOnly === true;
+
       // Ask which video framing the user wants for this run. We do this before
       // any heavy setup so the pipeline knows the layout up front and can apply
       // it uniformly across every clip. The saved default is shown as the
-      // suggested choice but the user can override per-run.
-      const videoFormat = (opts.videoFormat as 'fullscreen' | 'centered' | undefined)
-        ?? (await promptVideoFormat(config.videoFormat));
+      // suggested choice but the user can override per-run. Analyze-only runs
+      // never render, so the prompt is skipped there.
+      const videoFormat = analyzeOnly
+        ? config.videoFormat
+        : (opts.videoFormat as 'fullscreen' | 'centered' | undefined)
+          ?? (await promptVideoFormat(config.videoFormat));
 
       // Check Python setup
       spinner.start('Checking Python dependencies...');
@@ -189,6 +207,12 @@ program
         softCapRatio: parseFloatOrDefault(opts.softCapRatio as string, config.softCapRatio),
         // commander inverts --no-strict-completeness into opts.strictCompleteness === false
         strictCompleteness: opts.strictCompleteness !== false && config.strictCompleteness,
+        // commander inverts --no-identity-tracking into opts.identityTracking === false
+        useIdentityTracking: opts.identityTracking !== false && config.useIdentityTracking,
+        debugTracking: opts.debugTracking === true || config.debugTracking,
+        // commander inverts --no-resume into opts.resume === false
+        noResume: opts.resume === false,
+        analyzeOnly,
         exportOptions: {
           outputDir,
           format: ((opts.format as string) || config.format) as 'mp4' | 'mov' | 'webm',
@@ -220,9 +244,17 @@ program
       console.log(chalk.white(`  Output:   ${outputDir}`));
       console.log(chalk.white(`  Model:    Whisper ${pipelineConfig.whisperModel}`));
       console.log(chalk.white(`  Clips:    ${pipelineConfig.minClipDuration}-${pipelineConfig.maxClipDuration}s, max ${pipelineConfig.maxClips}`));
-      console.log(chalk.white(`  Quality:  ${pipelineConfig.exportOptions.quality}`));
-      console.log(chalk.white(`  Format:   ${videoFormat === 'centered' ? 'centered (half-height with black bars)' : 'fullscreen (fill 9:16)'}`));
-      console.log(chalk.white(`  Captions: ${pipelineConfig.exportOptions.withCaptions ? 'yes' : 'no'}`));
+      if (analyzeOnly) {
+        console.log(chalk.white(`  Mode:     analyze-only (timestamps → viral_moments.json, no rendering)`));
+      } else {
+        console.log(chalk.white(`  Quality:  ${pipelineConfig.exportOptions.quality}`));
+        console.log(chalk.white(`  Format:   ${videoFormat === 'centered' ? 'centered (half-height with black bars)' : 'fullscreen (fill 9:16)'}`));
+        console.log(chalk.white(`  Captions: ${pipelineConfig.exportOptions.withCaptions ? 'yes' : 'no'}`));
+        console.log(chalk.white(`  Tracker:  ${pipelineConfig.useIdentityTracking ? 'mtcnn + identity (default)' : 'haar (legacy)'}`));
+        if (pipelineConfig.debugTracking) {
+          console.log(chalk.white(`  Debug:    writing _tracking.json sidecars`));
+        }
+      }
       console.log('');
 
       // Run pipeline
@@ -249,9 +281,14 @@ program
 
       // Print summary
       console.log('');
-      console.log(chalk.bold.green('  Processing complete!'));
+      console.log(chalk.bold.green(analyzeOnly ? '  Analysis complete!' : '  Processing complete!'));
       console.log(chalk.white(`  Time elapsed: ${elapsed}s`));
-      console.log(chalk.white(`  Clips generated: ${result.renderedPaths.length}`));
+      if (analyzeOnly) {
+        console.log(chalk.white(`  Viral moments found: ${result.clips.clips.length}`));
+        console.log(chalk.white(`  Timestamps: ${path.join(result.outputDir, 'viral_moments.json')}`));
+      } else {
+        console.log(chalk.white(`  Clips generated: ${result.renderedPaths.length}`));
+      }
       console.log(chalk.white(`  Output folder: ${result.outputDir}`));
 
       if (result.clips.clips.length > 0) {
@@ -260,9 +297,12 @@ program
         for (const clip of result.clips.clips) {
           const scoreColor = clip.viralScore >= 80 ? chalk.green :
                             clip.viralScore >= 60 ? chalk.yellow : chalk.gray;
+          const timing = analyzeOnly
+            ? `(${formatClock(clip.start)} → ${formatClock(clip.end)}, ${clip.duration}s, ${clip.category})`
+            : `(${clip.duration}s, ${clip.category})`;
           console.log(
             `    ${scoreColor(`[${clip.viralScore}]`)} ${chalk.white(clip.title)} ` +
-            `${chalk.gray(`(${clip.duration}s, ${clip.category})`)}`
+            `${chalk.gray(timing)}`
           );
         }
       }
@@ -293,6 +333,8 @@ program
   .option('--end-padding <sec>', 'Set tail padding (seconds) added after each clip ending')
   .option('--soft-cap-ratio <ratio>', 'Set soft-cap multiplier on max-duration')
   .option('--strict-completeness <bool>', 'Set strict completeness gate (true/false)')
+  .option('--identity-tracking <bool>', 'Use MTCNN + identity-embedding tracker (true/false)')
+  .option('--debug-tracking <bool>', 'Write per-clip _tracking.json sidecars (true/false)')
   .option('--caption-font <name>', 'Set caption font family')
   .option('--caption-size <px>', 'Set caption font size')
   .option('--caption-color <hex>', 'Set primary caption color')
@@ -341,6 +383,22 @@ program
         process.exit(1);
       }
       config.strictCompleteness = v === 'true'; changed = true;
+    }
+    if (opts.identityTracking !== undefined) {
+      const v = String(opts.identityTracking).toLowerCase();
+      if (v !== 'true' && v !== 'false') {
+        console.error(chalk.red(`Invalid --identity-tracking: ${v}. Expected true or false.`));
+        process.exit(1);
+      }
+      config.useIdentityTracking = v === 'true'; changed = true;
+    }
+    if (opts.debugTracking !== undefined) {
+      const v = String(opts.debugTracking).toLowerCase();
+      if (v !== 'true' && v !== 'false') {
+        console.error(chalk.red(`Invalid --debug-tracking: ${v}. Expected true or false.`));
+        process.exit(1);
+      }
+      config.debugTracking = v === 'true'; changed = true;
     }
     if (opts.captionFont) { config.captionStyle.fontFamily = opts.captionFont as string; changed = true; }
     if (opts.captionSize) { config.captionStyle.fontSize = parseInt(opts.captionSize as string); changed = true; }
@@ -520,7 +578,7 @@ program
     try {
       await setupPython();
       spinner.succeed('Python environment ready!');
-      console.log(chalk.gray('  Installed: openai-whisper, opencv-python-headless, numpy'));
+      console.log(chalk.gray('  Installed: faster-whisper, opencv-python-headless, numpy, torch, torchvision, facenet-pytorch'));
     } catch (err) {
       spinner.fail('Setup failed');
       console.error(chalk.red(err instanceof Error ? err.message : String(err)));

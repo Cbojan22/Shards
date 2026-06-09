@@ -1,82 +1,103 @@
 #!/usr/bin/env python3
-"""Map speakers (from transcription) to faces (from face detection) using temporal lip movement correlation."""
+"""Map speakers (from transcription) to either face tracks or person identities
+using temporal lip-movement correlation.
+
+Two input modes:
+- --faces PATH: legacy mode. Maps speaker -> faceId (per-track).
+- --persons PATH: identity mode. Maps speaker -> personId. Lip-movement is
+  aggregated across each person's full appearance set across the whole video,
+  which is far more robust than the per-track aggregation.
+"""
 
 import argparse
 import json
 import sys
-import os
+
 
 def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--transcript', required=True, help='Path to transcript JSON')
-    parser.add_argument('--faces', required=True, help='Path to faces JSON')
+    parser.add_argument('--faces', help='Path to faces JSON (legacy mode)')
+    parser.add_argument('--persons', help='Path to persons JSON (from cluster_identities.py)')
     args = parser.parse_args()
+
+    if not args.faces and not args.persons:
+        print(json.dumps({"error": "Either --faces or --persons must be provided"}))
+        sys.exit(1)
 
     try:
         with open(args.transcript, 'r') as f:
             transcript = json.load(f)
-        with open(args.faces, 'r') as f:
-            faces = json.load(f)
+        if args.persons:
+            with open(args.persons, 'r') as f:
+                persons_data = json.load(f)
+            entities = persons_data.get("persons", {})
+            mode = "person"
+        else:
+            with open(args.faces, 'r') as f:
+                faces_data = json.load(f)
+            entities = faces_data.get("faces", {})
+            mode = "face"
     except Exception as e:
         print(json.dumps({"error": f"Failed to load input files: {e}"}))
         sys.exit(1)
 
     try:
         segments = transcript.get("segments", [])
-        face_data = faces.get("faces", {})
         speakers = list(set(s["speaker"] for s in segments))
-        face_ids = list(face_data.keys())
+        entity_ids = list(entities.keys())
 
-        log(f"Mapping {len(speakers)} speakers to {len(face_ids)} faces")
+        log(f"Mapping {len(speakers)} speakers to {len(entity_ids)} {mode}(s)")
 
-        if not speakers or not face_ids:
-            # No mapping possible
+        if not speakers or not entity_ids:
             output = {
-                "mapping": {s: face_ids[0] if face_ids else "FACE_0" for s in speakers},
+                "mapping": {s: entity_ids[0] if entity_ids else f"{mode.upper()}_0" for s in speakers},
                 "confidence": {s: 0.0 for s in speakers},
             }
             print(json.dumps(output))
             return
 
-        # For each speaker, compute average lip movement of each face during their speaking segments
-        speaker_face_scores = {}  # speaker -> {face_id -> avg_lip_movement}
+        # For each speaker, accumulate total lip movement of each entity during
+        # that speaker's speaking segments. We sum rather than average because
+        # average rewards ghost clusters: a person with 10 frames that all
+        # happen during speech gets a near-perfect average and beats a real
+        # speaker with 600 mostly-speech frames whose average is diluted by
+        # listening pauses. Summing penalises sparse clusters proportionally
+        # to how rarely they're on screen, which is the correct prior.
+        speaker_entity_scores = {}
 
         for speaker in speakers:
-            speaker_face_scores[speaker] = {}
-            # Get all time ranges where this speaker talks
+            speaker_entity_scores[speaker] = {}
             speaker_ranges = [
                 (seg["start"], seg["end"])
                 for seg in segments
                 if seg["speaker"] == speaker
             ]
 
-            for face_id in face_ids:
-                appearances = face_data[face_id].get("appearances", [])
+            for entity_id in entity_ids:
+                appearances = entities[entity_id].get("appearances", [])
                 if not appearances:
-                    speaker_face_scores[speaker][face_id] = 0.0
+                    speaker_entity_scores[speaker][entity_id] = 0.0
                     continue
 
-                # Find lip movement values during speaker's active ranges
-                lip_values = []
+                total_lip = 0.0
                 for app in appearances:
                     t = app["time"]
                     for start, end in speaker_ranges:
                         if start <= t <= end:
-                            lip_values.append(app["lip_movement"])
+                            total_lip += app["lip_movement"]
                             break
 
-                avg_lip = sum(lip_values) / len(lip_values) if lip_values else 0.0
-                speaker_face_scores[speaker][face_id] = avg_lip
+                speaker_entity_scores[speaker][entity_id] = total_lip
 
-        # Assign faces to speakers greedily (highest correlation first)
         mapping = {}
         confidence = {}
-        used_faces = set()
+        used_entities = set()
 
-        # Sort speakers by total speaking time (most talkative first for better assignment)
         speaker_times = {}
         for speaker in speakers:
             total = sum(seg["end"] - seg["start"] for seg in segments if seg["speaker"] == speaker)
@@ -85,30 +106,28 @@ def main():
         sorted_speakers = sorted(speakers, key=lambda s: speaker_times.get(s, 0), reverse=True)
 
         for speaker in sorted_speakers:
-            scores = speaker_face_scores.get(speaker, {})
-            best_face = None
+            scores = speaker_entity_scores.get(speaker, {})
+            best_entity = None
             best_score = -1
 
-            for face_id, score in scores.items():
-                if face_id not in used_faces and score > best_score:
+            for entity_id, score in scores.items():
+                if entity_id not in used_entities and score > best_score:
                     best_score = score
-                    best_face = face_id
+                    best_entity = entity_id
 
-            if best_face is None:
-                # All faces used, assign the one with highest score anyway
-                for face_id, score in scores.items():
+            if best_entity is None:
+                for entity_id, score in scores.items():
                     if score > best_score:
                         best_score = score
-                        best_face = face_id
+                        best_entity = entity_id
 
-            if best_face is None:
-                best_face = face_ids[0]
+            if best_entity is None:
+                best_entity = entity_ids[0]
                 best_score = 0.0
 
-            mapping[speaker] = best_face
-            used_faces.add(best_face)
+            mapping[speaker] = best_entity
+            used_entities.add(best_entity)
 
-            # Confidence: how much higher is the best score vs second best
             sorted_scores = sorted(scores.values(), reverse=True)
             if len(sorted_scores) >= 2 and sorted_scores[0] > 0:
                 confidence[speaker] = min(1.0, sorted_scores[0] / (sorted_scores[0] + sorted_scores[1] + 1e-8))
@@ -118,14 +137,14 @@ def main():
                 confidence[speaker] = 0.0
 
             confidence[speaker] = round(confidence[speaker], 3)
-            log(f"  {speaker} -> {best_face} (confidence: {confidence[speaker]:.1%})")
+            log(f"  {speaker} -> {best_entity} (confidence: {confidence[speaker]:.1%})")
 
         output = {
             "mapping": mapping,
             "confidence": confidence,
         }
 
-        log("Speaker-face mapping complete")
+        log("Speaker mapping complete")
         print(json.dumps(output))
 
     except Exception as e:

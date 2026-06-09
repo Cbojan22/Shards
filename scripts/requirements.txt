@@ -1,3 +1,6 @@
 faster-whisper
 opencv-python-headless
-numpy
+numpy<2
+torch
+torchvision
+facenet-pytorch

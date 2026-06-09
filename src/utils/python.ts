@@ -23,7 +23,15 @@ export async function runPythonScript<T>(
   return new Promise<T>((resolve, reject) => {
     const proc = spawn(pythonBin, [scriptPath, ...cliArgs], {
       cwd: SCRIPTS_DIR,
-      env: { ...process.env, PYTHONUNBUFFERED: '1' },
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1',
+        // ctranslate2 (faster-whisper's backend) and torch both bring their
+        // own libiomp5.dylib, which trips OMP Error #15 on macOS. This is
+        // the standard workaround for the torch + ctranslate2 combo. Safe
+        // for our single-threaded CPU inference path.
+        KMP_DUPLICATE_LIB_OK: 'TRUE',
+      },
     });
 
     let stdout = '';

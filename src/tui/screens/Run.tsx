@@ -133,6 +133,8 @@ export function Run({ answers, baseConfig, apiKey, onDone }: RunProps): React.Re
           endPaddingSec: baseConfig.endPaddingSec,
           softCapRatio: baseConfig.softCapRatio,
           strictCompleteness: baseConfig.strictCompleteness,
+          useIdentityTracking: baseConfig.useIdentityTracking,
+          debugTracking: baseConfig.debugTracking,
           exportOptions: {
             outputDir,
             format: answers.format,

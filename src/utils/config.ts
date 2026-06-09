@@ -29,6 +29,10 @@ export interface UserConfig {
   softCapRatio: number;
   /** Drop clips Claude flagged as incomplete (completeness_score<70 or ending_type "trail_off"). */
   strictCompleteness: boolean;
+  /** Use MTCNN + identity-embedding face tracking. Default true. */
+  useIdentityTracking: boolean;
+  /** Write per-clip _tracking.json sidecars (off by default). */
+  debugTracking: boolean;
 }
 
 export const DEFAULT_CONFIG: UserConfig = {
@@ -48,6 +52,8 @@ export const DEFAULT_CONFIG: UserConfig = {
   endPaddingSec: 0.6,
   softCapRatio: 1.5,
   strictCompleteness: true,
+  useIdentityTracking: true,
+  debugTracking: false,
 };
 
 const CONFIG_DIR = process.env.SHARDS_CONFIG_DIR || path.join(homedir(), '.shards');

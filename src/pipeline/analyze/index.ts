@@ -84,14 +84,28 @@ export async function analyzeForViralClips(
   let chunkFailures = 0;
 
   for (let i = 0; i < chunks.length; i++) {
-    if (chunks.length > 1) {
-      onProgress?.(`Analyzing chunk ${i + 1}/${chunks.length}...`);
-    }
+    // Always print chunk progress — used to gate this on chunks.length > 1
+    // which meant single-chunk runs printed nothing during a 30-90s API call
+    // and looked like a hang.
+    const chunkChars = chunks[i].length;
+    onProgress?.(
+      `Analyzing chunk ${i + 1}/${chunks.length} (${chunkChars.toLocaleString()} chars, may take 30-90s)...`
+    );
+
+    // Heartbeat every 15s while the API call is in flight so the user can
+    // tell the program hasn't stalled. cleared in the finally block.
+    const startedAt = Date.now();
+    const heartbeat = setInterval(() => {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      onProgress?.(`  ...still analyzing chunk ${i + 1} (${elapsed}s elapsed)`);
+    }, 15000);
 
     try {
       const rawClips = await analyzeChunk(
         client, model, chunks[i], minDuration, maxDuration, maxClips
       );
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      onProgress?.(`  Chunk ${i + 1} done in ${elapsed}s, ${rawClips.length} candidates`);
       allRawClips.push(...rawClips);
     } catch (err) {
       // Don't let one bad chunk burn the cost of the chunks that already
@@ -99,6 +113,8 @@ export async function analyzeForViralClips(
       chunkFailures++;
       const msg = err instanceof Error ? err.message : String(err);
       onProgress?.(`Chunk ${i + 1}/${chunks.length} failed (${msg}); skipping and continuing.`);
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
@@ -133,6 +149,7 @@ export async function analyzeForViralClips(
     clips,
     totalAnalyzed: transcript.segments.length,
     videoTitle: inferTitle(transcript),
+    partial: chunkFailures > 0,
   };
 }
 
@@ -228,18 +245,20 @@ TRANSCRIPT:
     ],
   };
 
+  // Stream the response instead of using messages.create(). Non-streaming
+  // requests can hang on the wire for 5+ minutes when Anthropic's edge holds
+  // the socket without flushing, tripping Node undici's body timeout and
+  // surfacing as a generic "Connection error." Streaming flushes deltas
+  // continuously so the socket never goes silent long enough to trip that.
+  // Billing is identical; SDK still applies maxRetries=4 to transient 5xx /
+  // network errors. .finalMessage() assembles the deltas into the same Message
+  // shape we used to get from messages.create().
   let response: Anthropic.Message;
   try {
-    response = await client.messages.create(requestPayload);
+    const stream = client.messages.stream(requestPayload);
+    response = await stream.finalMessage();
   } catch (err) {
-    // Retry once
-    try {
-      response = await client.messages.create(requestPayload);
-    } catch (retryErr) {
-      throw new Error(
-        `Claude API failed after retry: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
-      );
-    }
+    throw new Error(`Claude API failed: ${describeApiError(err)}`);
   }
 
   const text = response.content
@@ -248,6 +267,28 @@ TRANSCRIPT:
     .join('');
 
   return parseClipSuggestions(text);
+}
+
+// Anthropic SDK's default error.message often loses useful detail (network
+// failures collapse to "Connection error."). Pull out status, headers, and
+// the underlying cause when present so logs explain *why*, not just *what*.
+function describeApiError(err: unknown): string {
+  if (err instanceof Anthropic.APIError) {
+    const parts = [`${err.name}`];
+    if (err.status) parts.push(`status ${err.status}`);
+    const requestId = err.headers?.['request-id'];
+    if (requestId) parts.push(`request-id ${requestId}`);
+    parts.push(err.message || '(no message)');
+    return parts.join(' · ');
+  }
+  if (err instanceof Error) {
+    const cause = (err as { cause?: unknown }).cause;
+    if (cause instanceof Error) {
+      return `${err.name}: ${err.message} (cause: ${cause.name}: ${cause.message})`;
+    }
+    return `${err.name}: ${err.message}`;
+  }
+  return String(err);
 }
 
 function parseClipSuggestions(text: string): RawClipSuggestion[] {

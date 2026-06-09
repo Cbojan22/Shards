@@ -124,8 +124,11 @@ export async function renderClipWithReframe(job: {
   const cropW = job.cropKeyframes[0]?.w || 608;
   const cropH = job.cropKeyframes[0]?.h || 1080;
 
-  // Sample max 20 keyframes to keep expression manageable
-  const maxKf = 20;
+  // FFmpeg 8.1's expression evaluator silently rejects crop-x expressions
+  // past ~3300 chars. buildCropExpression now collapses constant runs, so
+  // 120 keyframes of *actual motion* (~25-35 chars/term) sits comfortably
+  // under that ceiling; static stretches no longer count toward the budget.
+  const maxKf = 120;
   let kfs = job.cropKeyframes;
   if (kfs.length > maxKf) {
     const step = Math.ceil(kfs.length / maxKf);
@@ -180,10 +183,20 @@ export async function renderClipWithReframe(job: {
     step1Output,
   ];
 
+  // Preserve the filter script on failure so the user can inspect the
+  // expression that broke FFmpeg. On success it's cleaned up.
+  let renderSucceeded = false;
   try {
     await runFFmpeg(args);
+    renderSucceeded = true;
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    e.message = `${e.message}\n\nFilter script preserved at: ${filterScriptPath}`;
+    throw e;
   } finally {
-    await unlink(filterScriptPath).catch(() => {});
+    if (renderSucceeded) {
+      await unlink(filterScriptPath).catch(() => {});
+    }
   }
 
   // Step 2: If subtitles, try to burn them in; fall back to soft subtitles
@@ -262,7 +275,9 @@ export function runFFmpeg(args: string[]): Promise<void> {
 
     proc.on('close', (code: number) => {
       if (code !== 0) {
-        const errLines = stderr.split('\n').filter(l => l.trim()).slice(-5).join('\n');
+        // Filter eval errors print the full broken expression in stderr,
+        // which can easily span 50+ lines on long clips. 100 covers it.
+        const errLines = stderr.split('\n').filter(l => l.trim()).slice(-100).join('\n');
         reject(new Error(`FFmpeg exited with code ${code}:\n${errLines}`));
       } else {
         resolve();
@@ -355,38 +370,103 @@ function buildCropExpression(
 
   const sorted = [...keyframes].sort((a, b) => a.time - b.time);
 
-  // Limit keyframes
-  const step = sorted.length > 20 ? Math.ceil(sorted.length / 20) : 1;
-  const sampled = sorted.filter((_, i) => i % step === 0 || i === sorted.length - 1);
+  // Matched to renderClipWithReframe's 120 cap.
+  const step = sorted.length > 120 ? Math.ceil(sorted.length / 120) : 1;
+  const downsampled = sorted.filter((_, i) => i % step === 0 || i === sorted.length - 1);
 
-  // Build a nested if/else chain using FFmpeg's if(cond\,then\,else) syntax.
-  // Even in filter_script files, commas must be escaped with backslash.
-  // This ensures there are NO gaps — every time value maps to a valid position.
+  // Collapse interior keyframes whose axis value matches both neighbours.
+  // A clip that pans off a face for the second half ends with dozens of
+  // identical `K*gte(t,N)*lt(t,N+.5)` terms; without this, the expression
+  // blows past the FFmpeg eval cap (~3300 chars on 8.x) even though the
+  // motion is trivially encodable as a single constant.
+  const sampled: typeof downsampled = [];
+  for (let i = 0; i < downsampled.length; i++) {
+    const v = Math.round(downsampled[i][axis]);
+    const prev = i > 0 ? Math.round(downsampled[i - 1][axis]) : null;
+    const next = i < downsampled.length - 1 ? Math.round(downsampled[i + 1][axis]) : null;
+    if (prev !== null && next !== null && v === prev && v === next) continue;
+    sampled.push(downsampled[i]);
+  }
+
+  // The old implementation built a right-nested if(lt(t,t1),seg,if(lt(t,t2),...))
+  // chain. FFmpeg's expression evaluator hard-fails ("Missing ')' or too many
+  // args") past ~50–60 levels of nested if(), which we hit immediately with
+  // any clip longer than ~30s at 0.5s keyframe spacing.
+  //
+  // New form: a FLAT sum of (segment_value * mask) terms, where mask is
+  //   gte(t,t0)*lt(t,t1)   — 1 inside the half-open interval [t0,t1), else 0
+  // so exactly one mask is 1 at any t and the sum equals the active segment.
+  // Zero nesting, evaluator-safe at any keyframe count.
 
   const C = '\\,'; // escaped comma for FFmpeg expressions
 
-  const lastVal = Math.round(sampled[sampled.length - 1][axis]);
-  let expr = String(lastVal);
+  // A keyframe-to-keyframe jump larger than this almost certainly corresponds
+  // to a real camera cut. Snap at midpoint of the interval rather than ramp.
+  const cropW = Math.max(...sampled.map((kf) => kf.w)) || 608;
+  const CUT_THRESHOLD_PX = cropW * 0.25;
 
-  for (let i = sampled.length - 2; i >= 0; i--) {
+  const terms: string[] = [];
+
+  for (let i = 0; i < sampled.length - 1; i++) {
     const kf = sampled[i];
     const next = sampled[i + 1];
     const v0 = Math.round(kf[axis]);
     const v1 = Math.round(next[axis]);
-    const t1 = next.time.toFixed(2);
+    const dv = v1 - v0;
+    const t0 = fmtNum(kf.time);
+    const t1 = fmtNum(next.time);
 
-    let segment: string;
+    let segValue: string;
     if (v0 === v1) {
-      segment = String(v0);
+      segValue = String(v0);
+    } else if (Math.abs(dv) > CUT_THRESHOLD_PX) {
+      // Camera cut: gte(t,tmid) is 0 before midpoint, 1 after — so the
+      // crop snaps at the midpoint of the keyframe interval (best estimate
+      // of the actual cut moment given fixed-interval sampling).
+      const tmid = fmtNum((kf.time + next.time) / 2);
+      segValue = `(${v0}${stepTerm(dv, `gte(t${C}${tmid})`)})`;
     } else {
-      const t0 = kf.time.toFixed(2);
-      const dt = (next.time - kf.time).toFixed(4);
+      const dt = fmtNum(next.time - kf.time, 4);
       // Linear interpolation: v0 + (v1-v0) * (t-t0) / dt
-      segment = `${v0}+${v1 - v0}*(t-${t0})/${dt}`;
+      segValue = `(${v0}${stepTerm(dv, `(t-${t0})/${dt}`)})`;
     }
 
-    expr = `if(lt(t${C}${t1})${C}${segment}${C}${expr})`;
+    // First segment also covers t < t0 (extrapolate backward) — match the
+    // old behavior. Middle/last middle segments use the half-open mask.
+    const mask = i === 0
+      ? `lt(t${C}${t1})`
+      : `gte(t${C}${t0})*lt(t${C}${t1})`;
+
+    terms.push(`${segValue}*${mask}`);
   }
 
-  return expr;
+  // After the last keyframe time, hold at the final value.
+  const lastVal = Math.round(sampled[sampled.length - 1][axis]);
+  const lastTime = fmtNum(sampled[sampled.length - 1].time);
+  terms.push(`${lastVal}*gte(t${C}${lastTime})`);
+
+  return terms.join('+');
+}
+
+// Compact "+ N * expr" / "- expr" / "+ expr" formatting based on coefficient
+// sign and magnitude. Saves ~3-6 chars per segment vs the naive form.
+function stepTerm(coef: number, expr: string): string {
+  if (coef === 1) return `+${expr}`;
+  if (coef === -1) return `-${expr}`;
+  if (coef >= 0) return `+${coef}*${expr}`;
+  return `${coef}*${expr}`; // negative coef already carries the sign
+}
+
+// Compact number formatter for FFmpeg expressions:
+// 0.500 -> .5, 1.000 -> 1, 12.345 -> 12.345
+function fmtNum(n: number, decimals: number = 3): string {
+  let s = n.toFixed(decimals);
+  if (s.includes('.')) {
+    s = s.replace(/0+$/, '');
+    s = s.replace(/\.$/, '');
+  }
+  if (s.startsWith('0.')) s = s.slice(1);
+  if (s.startsWith('-0.')) s = '-' + s.slice(2);
+  if (s === '' || s === '-') s = '0';
+  return s;
 }

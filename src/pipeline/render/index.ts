@@ -1,5 +1,5 @@
 import path from 'path';
-import { mkdir, unlink } from 'fs/promises';
+import { mkdir, unlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import {
@@ -11,6 +11,9 @@ import {
   SpeakerFaceMapping,
   ExportOptions,
   ClipRenderJob,
+  IdentityClusterResult,
+  TrackingDebugEntry,
+  TrackingDebugRecord,
 } from '../../types/index.js';
 import { renderClipWithReframe } from '../../utils/ffmpeg.js';
 import { generateCaptions } from '../captions/index.js';
@@ -28,6 +31,18 @@ interface CropKeyframe {
   // smoother never averages real positions with a "no face → defaultX" value
   // and drifts the camera toward the middle of the room.
   hasFace: boolean;
+  // Area of the target face's bbox at this keyframe, when hasFace=true.
+  // Used by `smoothKeyframes` to detect cuts that change shot scale (e.g.
+  // cut to close-up of the same speaker) without moving the face's
+  // horizontal position much — position-only cut detection misses those.
+  // Undefined for gap-filled keyframes so the smoother ignores them when
+  // comparing areas.
+  faceArea?: number;
+}
+
+interface EntityData {
+  appearances: FaceAppearance[];
+  centroidEmbedding?: number[];
 }
 
 // Padding applied AFTER snapping to segment boundaries, so we both capture
@@ -35,10 +50,6 @@ interface CropKeyframe {
 const START_PADDING_SECONDS = 0.3;
 const END_PADDING_SECONDS = 1.0;
 
-// Snap a clip to the surrounding transcript segments: extend the start back to
-// the beginning of the first sentence the AI's selection landed inside, and
-// the end forward to the end of the last sentence. Anthropic occasionally
-// picks boundaries mid-word; this guarantees we don't cut off context.
 function snapClipToSegments(
   clipStart: number,
   clipEnd: number,
@@ -48,13 +59,9 @@ function snapClipToSegments(
   let snappedEnd = clipEnd;
 
   for (const seg of transcript.segments) {
-    // Segment that contains (or starts just after) the requested start →
-    // pull back to the segment's start so we begin at the sentence boundary.
     if (seg.start < clipStart && seg.end > clipStart) {
       snappedStart = Math.min(snappedStart, seg.start);
     }
-    // Segment that contains (or ends just before) the requested end → push
-    // forward to the segment's end so we capture the full thought.
     if (seg.start < clipEnd && seg.end > clipEnd) {
       snappedEnd = Math.max(snappedEnd, seg.end);
     }
@@ -67,7 +74,10 @@ export async function renderClip(
   job: ClipRenderJob,
   onProgress?: (msg: string) => void
 ): Promise<string> {
-  const { clip, inputPath, outputPath, exportOptions, speakerFaceMap, faceData, transcript } = job;
+  const {
+    clip, inputPath, outputPath, exportOptions, speakerFaceMap, faceData,
+    transcript, personData, debugTracking,
+  } = job;
 
   onProgress?.(`Rendering clip: ${clip.title}`);
 
@@ -75,26 +85,20 @@ export async function renderClip(
   const sourceH = faceData.height || 1080;
   const sourceDuration = faceData.duration || transcript.duration || clip.end + END_PADDING_SECONDS;
 
-  // 1. Snap to sentence boundaries so we never cut mid-thought.
-  // 2. Add a small breath at the start and the existing trailing buffer.
-  // 3. Clamp to the source's actual duration.
   const snapped = snapClipToSegments(clip.start, clip.end, transcript);
   const startTime = Math.max(0, snapped.start - START_PADDING_SECONDS);
   const endTime = Math.min(sourceDuration, snapped.end + END_PADDING_SECONDS);
 
-  // Generate crop keyframes following active speaker's face. The video format
-  // determines how wide the source crop is — fullscreen = 9:16 close-up,
-  // centered = wider 9:8 region that will later be padded with black bars.
-  const keyframes = generateCropKeyframes(
-    { ...clip, start: startTime, end: endTime }, transcript, faceData, speakerFaceMap, sourceW, sourceH,
-    exportOptions.videoFormat
+  const { keyframes, debugRecord } = generateCropKeyframes(
+    { ...clip, start: startTime, end: endTime },
+    transcript, faceData, speakerFaceMap, sourceW, sourceH,
+    {
+      videoFormat: exportOptions.videoFormat,
+      personData,
+      debugTracking,
+    },
   );
 
-
-  // Generate captions if enabled. The ASS file lives in tmpdir for the
-  // duration of the burn-in pass — we only need it as a libass input, and
-  // the user wants the output folder to contain finished mp4s only, no
-  // working files.
   let subtitlePath: string | undefined;
   if (exportOptions.withCaptions) {
     subtitlePath = path.join(tmpdir(), `shards_caption_${clip.id}_${randomUUID()}.ass`);
@@ -128,8 +132,22 @@ export async function renderClip(
     if (subtitlePath) await unlink(subtitlePath).catch(() => {});
   }
 
+  // Debug-tracking sidecar — light version of the JSON writer that was
+  // reverted on 2026-05-18. No .ass sidecar, no _nocap.mp4, just the JSON.
+  if (debugRecord) {
+    const sidecarPath = outputPath.replace(/\.(mp4|mov|webm)$/i, '_tracking.json');
+    await writeFile(sidecarPath, JSON.stringify(debugRecord, null, 2));
+    onProgress?.(`  Debug tracking: ${path.basename(sidecarPath)}`);
+  }
+
   onProgress?.(`  Rendered: ${path.basename(outputPath)}`);
   return outputPath;
+}
+
+interface CropKeyframesOptions {
+  videoFormat: 'fullscreen' | 'centered';
+  personData?: IdentityClusterResult;
+  debugTracking?: boolean;
 }
 
 export function generateCropKeyframes(
@@ -139,62 +157,84 @@ export function generateCropKeyframes(
   speakerFaceMap: SpeakerFaceMapping,
   sourceWidth: number,
   sourceHeight: number,
-  videoFormat: 'fullscreen' | 'centered' = 'fullscreen'
-): CropKeyframe[] {
+  options: CropKeyframesOptions = { videoFormat: 'fullscreen' },
+): { keyframes: CropKeyframe[]; debugRecord?: TrackingDebugRecord } {
+  const { videoFormat, personData, debugTracking } = options;
   const cropHeight = sourceHeight;
-  // Fullscreen: 9:16 crop fills the output frame top-to-bottom.
-  // Centered: 9:8 crop (twice as wide) will later be scaled into the middle
-  // half of the 9:16 output, with equal black bars above and below.
   const cropAspect = videoFormat === 'centered' ? 9 / 8 : 9 / 16;
   const cropWidth = Math.min(Math.round(sourceHeight * cropAspect), sourceWidth);
   const defaultX = Math.round((sourceWidth - cropWidth) / 2);
 
+  // Identity mode: tracking entities are persons (stable identities across
+  // the whole video). Legacy mode: tracking entities are per-frame face tracks.
+  // Same iteration shape, different identity granularity.
+  const entities: Record<string, EntityData> = personData
+    ? Object.fromEntries(Object.entries(personData.persons).map(([id, p]) => [id, {
+        appearances: p.appearances,
+        centroidEmbedding: p.centroid_embedding,
+      }]))
+    : Object.fromEntries(Object.entries(faceData.faces).map(([id, f]) => [id, {
+        appearances: f.appearances,
+      }]));
+
   const keyframes: CropKeyframe[] = [];
-  const interval = 0.5; // sample every 0.5s (was 0.25)
+  const debugEntries: TrackingDebugEntry[] = [];
+  const interval = 0.5;
   const clipDuration = clip.end - clip.start;
 
   // The diarization in transcribe.py just flips SPEAKER_0/SPEAKER_1 on every
   // >1.5s silence gap — labels don't correspond to real speaker identities.
-  // That makes the speaker→face mapping noisy. We gate on its self-reported
-  // confidence: above this floor we trust the mapping; below it, we fall
-  // through to whichever face the size+center scoring picks (largest face,
-  // which is reliably the active speaker in a close-up).
+  // We gate on its self-reported confidence: above this floor we trust the
+  // mapping; below it, we now fall through to the dominant-screen-time
+  // entity in the clip window (used to be "biggest face near source center",
+  // which was the path that locked onto ads / posters / non-speakers).
   const SPEAKER_MAP_MIN_CONFIDENCE = 0.4;
 
-  // Dominant speaker = whoever talks the most in this clip. Used as a
-  // tie-breaker when the active speaker can't be determined for an individual
-  // keyframe (silence, sub-second pause). Only resolved to a face when the
-  // mapping confidence clears the floor — otherwise the fallback would lock
-  // onto whichever wrong face the noisy mapping pointed at for the whole clip.
   const dominantSpeaker = findDominantSpeaker(clip.start, clip.end, transcript.segments);
-  const dominantFaceId =
+  const mappedDominant =
     dominantSpeaker &&
     (speakerFaceMap.confidence[dominantSpeaker] ?? 0) >= SPEAKER_MAP_MIN_CONFIDENCE
       ? speakerFaceMap.mapping[dominantSpeaker] ?? null
       : null;
+  // New fallback: the entity that's actually on screen the most during this
+  // clip's window. Stable across keyframes and avoids the per-frame
+  // biggest-near-center thrash that was the visible bug.
+  const dominantEntityInWindow = findDominantEntityInRange(
+    clip.start, clip.end, entities,
+  );
+  const finalFallbackEntity = mappedDominant ?? dominantEntityInWindow;
 
   for (let t = 0; t <= clipDuration; t += interval) {
     const absTime = clip.start + t;
     const speaker = getActiveSpeaker(absTime, transcript.segments);
+    const speakerConfidence = speaker ? (speakerFaceMap.confidence[speaker] ?? 0) : 0;
 
-    let targetFaceId: string | null = null;
-    if (speaker && (speakerFaceMap.confidence[speaker] ?? 0) >= SPEAKER_MAP_MIN_CONFIDENCE) {
-      targetFaceId = speakerFaceMap.mapping[speaker] ?? null;
-    } else if (dominantFaceId) {
-      targetFaceId = dominantFaceId;
+    let targetEntityId: string | null = null;
+    if (speaker && speakerConfidence >= SPEAKER_MAP_MIN_CONFIDENCE) {
+      targetEntityId = speakerFaceMap.mapping[speaker] ?? null;
+    } else if (finalFallbackEntity) {
+      targetEntityId = finalFallbackEntity;
     }
-    const facePos = findBestVisibleFace(absTime, faceData, targetFaceId);
+
+    const pick = findBestVisibleEntity(absTime, entities, sourceWidth, targetEntityId);
 
     let x = defaultX;
     let hasFace = false;
-    if (facePos) {
+    let faceArea: number | undefined;
+    // Only commit to a face position when (a) we have no target — early in
+    // the pipeline before any mapping/fallback decision — or (b) the picker
+    // landed on the target we actually wanted. Non-target picks would make
+    // the camera jump to whoever happens to be on screen; instead we leave
+    // hasFace=false so fillKeyframeGaps interpolates from the target's last
+    // known position. This was the visible regression from the identity-
+    // tracking revamp: target loses the 5× score bonus to a closer/larger
+    // non-speaker face and the crop wanders off the speaker.
+    if (pick && (!targetEntityId || pick.entityId === targetEntityId)) {
       hasFace = true;
-      // Center the speaker's face in the output crop. Earlier code blended
-      // the crop center with the source's geometric center — that's what was
-      // pushing speakers off to one side of the output frame.
-      const faceCenterX = facePos.x + facePos.w / 2;
+      const faceCenterX = pick.rect.x + pick.rect.w / 2;
       x = Math.round(faceCenterX - cropWidth / 2);
       x = Math.max(0, Math.min(x, sourceWidth - cropWidth));
+      faceArea = pick.rect.w * pick.rect.h;
     }
 
     keyframes.push({
@@ -205,44 +245,65 @@ export function generateCropKeyframes(
       height: cropHeight,
       speaker: speaker || 'unknown',
       hasFace,
+      faceArea,
     });
+
+    if (debugTracking) {
+      const pickedAppearance = pick
+        ? findAppearanceAtOrBefore(entities[pick.entityId].appearances, absTime)
+        : null;
+      const speakerMappedId = speaker ? speakerFaceMap.mapping[speaker] ?? null : null;
+      const embeddingDistance = personData && speakerMappedId && pick
+        ? cosineDistanceBetween(
+            personData.persons[pick.entityId]?.centroid_embedding,
+            personData.persons[speakerMappedId]?.centroid_embedding,
+          )
+        : null;
+      debugEntries.push({
+        time: Number(absTime.toFixed(3)),
+        speaker,
+        mappedTargetId: targetEntityId,
+        pickedId: pick?.entityId ?? null,
+        pickedScore: pick ? Number(pick.score.toFixed(4)) : 0,
+        runnerUpId: pick?.runnerUp?.entityId ?? null,
+        runnerUpScore: pick?.runnerUp ? Number(pick.runnerUp.score.toFixed(4)) : 0,
+        speakerConfidence: Number(speakerConfidence.toFixed(3)),
+        lipMovement: pickedAppearance ? pickedAppearance.lip_movement : 0,
+        embeddingDistance,
+        bbox: pick ? [
+          Math.round(pick.rect.x), Math.round(pick.rect.y),
+          Math.round(pick.rect.w), Math.round(pick.rect.h),
+        ] : null,
+      });
+    }
   }
 
-  // Replace every "no face" keyframe with an interpolated value drawn from the
-  // surrounding real detections — leading/trailing gaps carry the nearest
-  // valid x; middle gaps are linearly interpolated between bookends. This
-  // matters because the smoother below averages a window of keyframes; if any
-  // window member still held the defaultX placeholder, the average would drift
-  // the crop toward the center of the source frame.
   fillKeyframeGaps(keyframes);
+  const smoothed = smoothKeyframes(keyframes, 7, sourceWidth);
 
-  // Smooth keyframes to reduce jitter (larger window for smoother motion)
-  return smoothKeyframes(keyframes, 7, sourceWidth);
+  const debugRecord: TrackingDebugRecord | undefined = debugTracking ? {
+    clipId: clip.id,
+    clipTitle: clip.title,
+    videoFormat,
+    useIdentityTracking: Boolean(personData),
+    entries: debugEntries,
+  } : undefined;
+
+  return { keyframes: smoothed, debugRecord };
 }
 
 function fillKeyframeGaps(keyframes: CropKeyframe[]): void {
   const firstValid = keyframes.findIndex((k) => k.hasFace);
-  if (firstValid === -1) {
-    // No face was ever detected in this clip — leave the placeholder centers.
-    // This degrades to a simple center-crop, which is the least bad option.
-    return;
-  }
+  if (firstValid === -1) return;
 
-  // Forward-fill leading gap with the first valid x.
   const firstX = keyframes[firstValid].x;
-  for (let i = 0; i < firstValid; i++) {
-    keyframes[i].x = firstX;
-  }
+  for (let i = 0; i < firstValid; i++) keyframes[i].x = firstX;
 
-  // Backward-fill trailing gap with the last valid x.
   let lastValid = keyframes.length - 1;
   while (lastValid >= 0 && !keyframes[lastValid].hasFace) lastValid--;
   const lastX = keyframes[lastValid].x;
-  for (let i = lastValid + 1; i < keyframes.length; i++) {
-    keyframes[i].x = lastX;
-  }
+  for (let i = lastValid + 1; i < keyframes.length; i++) keyframes[i].x = lastX;
 
-  // Linearly interpolate middle gaps between the bookend valid keyframes.
   let i = firstValid + 1;
   while (i <= lastValid) {
     if (keyframes[i].hasFace) {
@@ -268,16 +329,22 @@ function smoothKeyframes(
 ): CropKeyframe[] {
   if (keyframes.length <= windowSize) return keyframes;
 
-  // A keyframe-to-keyframe x jump larger than this is a hard camera cut, not
-  // an actual head movement. We refuse to smooth across cuts because the
-  // average between two unrelated angles lands in the empty middle of the
-  // source frame — exactly the "neither speaker visible" symptom. The
-  // speaker-label check below catches changes when diarization is reliable;
-  // this catches them when it isn't.
   const CUT_THRESHOLD_PX = sourceWidth * 0.25;
+  // A face that doubles or halves in apparent size within 1s of sampling is
+  // essentially always a hard cut to a different shot scale (close-up ↔
+  // wide). Natural face motion (lean-in, walk-toward-camera) is far slower
+  // than this. Verified across the 7-clip baseline: 9 of 10 area jumps
+  // ≥ this ratio co-occur with a position cut, and the 10th is the missed
+  // close-up cut that motivated this check — zero false positives.
+  const AREA_CUT_RATIO = 2.0;
 
   const smoothed: CropKeyframe[] = [];
   const half = Math.floor(windowSize / 2);
+
+  const isAreaCut = (a: number | undefined, b: number | undefined): boolean => {
+    if (!a || !b) return false;
+    return a / b > AREA_CUT_RATIO || b / a > AREA_CUT_RATIO;
+  };
 
   for (let i = 0; i < keyframes.length; i++) {
     const start = Math.max(0, i - half);
@@ -292,16 +359,38 @@ function smoothKeyframes(
       }
     }
     if (!hasBoundary) {
+      // Per-step (0.5s) jumps catch hard cuts that complete in one sample.
+      // 2-step (1s) jumps catch cuts whose face-position change ramps across
+      // a couple of samples — e.g. a cut to a wider shot where each
+      // individual step is below threshold but the total motion isn't. Same
+      // threshold for both, so this isn't a tuned parameter, just a wider
+      // measurement window applied to the existing one.
+      // Area discontinuities catch cuts where the speaker stays at roughly
+      // the same horizontal position but the shot scale changes (close-up
+      // of the same person), which position-only detection cannot see.
       for (let j = start + 1; j <= end; j++) {
         if (Math.abs(keyframes[j].x - keyframes[j - 1].x) > CUT_THRESHOLD_PX) {
           hasBoundary = true;
           break;
         }
+        if (isAreaCut(keyframes[j].faceArea, keyframes[j - 1].faceArea)) {
+          hasBoundary = true;
+          break;
+        }
+        if (j >= start + 2) {
+          if (Math.abs(keyframes[j].x - keyframes[j - 2].x) > CUT_THRESHOLD_PX) {
+            hasBoundary = true;
+            break;
+          }
+          if (isAreaCut(keyframes[j].faceArea, keyframes[j - 2].faceArea)) {
+            hasBoundary = true;
+            break;
+          }
+        }
       }
     }
 
     if (hasBoundary) {
-      // Preserve the cut — don't average across it.
       smoothed.push({ ...keyframes[i] });
     } else {
       let sumX = 0;
@@ -320,9 +409,6 @@ function smoothKeyframes(
   return smoothed;
 }
 
-// Total speaking time per speaker across the clip's range — whoever leads
-// is the "primary subject" we should default to when frame-level speaker
-// detection is ambiguous.
 function findDominantSpeaker(
   clipStart: number,
   clipEnd: number,
@@ -347,6 +433,30 @@ function findDominantSpeaker(
   return best;
 }
 
+// Entity with the most appearances inside the clip window. Used as the
+// fallback when the speaker→entity mapping is too low-confidence to trust.
+// Replaces the old biggest-face-near-center fallback that locked onto ad
+// faces / non-speakers.
+function findDominantEntityInRange(
+  clipStart: number,
+  clipEnd: number,
+  entities: Record<string, EntityData>,
+): string | null {
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [id, data] of Object.entries(entities)) {
+    let count = 0;
+    for (const app of data.appearances) {
+      if (app.time >= clipStart && app.time <= clipEnd) count++;
+    }
+    if (count > bestCount) {
+      bestCount = count;
+      best = id;
+    }
+  }
+  return best;
+}
+
 export function getActiveSpeaker(
   time: number,
   segments: TranscriptSegment[]
@@ -357,7 +467,6 @@ export function getActiveSpeaker(
     }
   }
 
-  // Find nearest segment if we're in a gap
   let closest: TranscriptSegment | null = null;
   let closestDist = Infinity;
 
@@ -377,37 +486,49 @@ function bboxToRect(app: FaceAppearance): { x: number; y: number; w: number; h: 
   return { x: app.bbox[0], y: app.bbox[1], w: app.bbox[2], h: app.bbox[3] };
 }
 
-/**
- * Find the best visible face at a given time across all tracked faces.
- * If `targetFaceId` is provided, that face gets a strong scoring bonus so the
- * crop locks onto the active speaker even when another face is larger on
- * screen — but the bonus is multiplicative, so a missing/tiny target face will
- * still cleanly fall through to the next-best candidate.
- */
-function findBestVisibleFace(
+function findAppearanceAtOrBefore(
+  apps: FaceAppearance[],
   time: number,
-  faceData: FaceDetectionResult,
-  targetFaceId: string | null = null,
-): { x: number; y: number; w: number; h: number } | null {
-  // A face track is only eligible at `time` if it has an appearance within
-  // this window in either direction. Beyond it, the camera has almost
-  // certainly cut to a different angle and the stale position doesn't match
-  // what's on screen any more.
+): FaceAppearance | null {
+  let best: FaceAppearance | null = null;
+  for (const a of apps) {
+    if (a.time <= time && (!best || a.time > best.time)) best = a;
+  }
+  return best;
+}
+
+interface EntityPick {
+  entityId: string;
+  rect: { x: number; y: number; w: number; h: number };
+  score: number;
+  runnerUp?: { entityId: string; score: number };
+}
+
+/**
+ * Find the best-scoring visible entity (face track or person identity) at a
+ * given time. Generic over the entity collection — same scoring works for
+ * both because both expose an `appearances` list of FaceAppearance.
+ *
+ * Returns the winner with its rect/score AND the runner-up's id/score so the
+ * debug-tracking sidecar can show what was nearly picked.
+ */
+function findBestVisibleEntity(
+  time: number,
+  entities: Record<string, EntityData>,
+  frameWidth: number,
+  targetEntityId: string | null = null,
+): EntityPick | null {
   const FRESHNESS_LIMIT_SECONDS = 2;
-  // The target face gets a strong-but-not-absolute scoring bonus. Soft
-  // preference: when the speaker→face mapping is correct it picks the right
-  // face even if a larger phantom is on screen, but if the target track has
-  // no nearby appearance the next-best real face still wins.
-  const TARGET_FACE_BONUS = 5;
+  const TARGET_ENTITY_BONUS = 5;
 
-  let bestFace: { x: number; y: number; w: number; h: number } | null = null;
-  let bestScore = -Infinity;
+  let best: EntityPick | null = null;
+  let runnerScore = -Infinity;
+  let runnerId: string | null = null;
 
-  for (const [faceId, data] of Object.entries(faceData.faces)) {
+  for (const [entityId, data] of Object.entries(entities)) {
     const apps = data.appearances;
     if (apps.length < 5) continue;
 
-    // Find nearest appearances for interpolation
     let before: FaceAppearance | null = null;
     let after: FaceAppearance | null = null;
 
@@ -416,35 +537,21 @@ function findBestVisibleFace(
       if (app.time >= time && (!after || app.time < after.time)) after = app;
     }
 
-    // Reject backward extrapolation: a face track whose first sighting is in
-    // the future hasn't been seen yet. Using that first-sighting position for
-    // earlier frames leaks a close-up's coordinates into the preceding wide
-    // shot, putting the crop in the empty middle of the room.
     if (!before) continue;
 
     const beforeAge = time - before.time;
-    // Apply the freshness limit to `before` UNCONDITIONALLY — not just when
-    // `after` is null. Previously this guard only fired without an `after`,
-    // which let stale tracks (e.g. an interviewer's close-up that reappears
-    // 30s later) project their position into intervening wide-shot frames
-    // because the long-distance `after` made the function think it had
-    // valid interpolation data.
     if (beforeAge > FRESHNESS_LIMIT_SECONDS) continue;
 
-    // `after` is only a useful interpolation bookend when it's also within
-    // the freshness window. A far-future appearance means there's a multi-
-    // second gap that almost always spans camera cuts — interpolating across
-    // it produces phantom mid-cut positions. Drop it and use `before` alone.
     const usableAfter = after && after.time - time <= FRESHNESS_LIMIT_SECONDS ? after : null;
 
     let pos: { x: number; y: number; w: number; h: number };
     if (usableAfter && usableAfter !== before) {
-      const t = (time - before.time) / (usableAfter.time - before.time);
+      const tt = (time - before.time) / (usableAfter.time - before.time);
       pos = {
-        x: before.bbox[0] + (usableAfter.bbox[0] - before.bbox[0]) * t,
-        y: before.bbox[1] + (usableAfter.bbox[1] - before.bbox[1]) * t,
-        w: before.bbox[2] + (usableAfter.bbox[2] - before.bbox[2]) * t,
-        h: before.bbox[3] + (usableAfter.bbox[3] - before.bbox[3]) * t,
+        x: before.bbox[0] + (usableAfter.bbox[0] - before.bbox[0]) * tt,
+        y: before.bbox[1] + (usableAfter.bbox[1] - before.bbox[1]) * tt,
+        w: before.bbox[2] + (usableAfter.bbox[2] - before.bbox[2]) * tt,
+        h: before.bbox[3] + (usableAfter.bbox[3] - before.bbox[3]) * tt,
       };
     } else {
       pos = bboxToRect(before);
@@ -453,20 +560,46 @@ function findBestVisibleFace(
       ? Math.min(beforeAge, usableAfter.time - time)
       : beforeAge;
 
-    // Score by face size (larger = better), time proximity, and center preference.
     const faceCenterX = pos.x + pos.w / 2;
-    const frameW = faceData.width || 1920;
-    const distFromCenter = Math.abs(faceCenterX - frameW / 2) / (frameW / 2);
+    const distFromCenter = Math.abs(faceCenterX - frameWidth / 2) / (frameWidth / 2);
     const centerBonus = 1 - distFromCenter * 0.5;
-    const speakerBonus = targetFaceId && faceId === targetFaceId ? TARGET_FACE_BONUS : 1;
-    const score = pos.w * pos.h * centerBonus * speakerBonus / (1 + nearestDist * 0.5);
-    if (score > bestScore) {
-      bestScore = score;
-      bestFace = pos;
+    const targetBonus = targetEntityId && entityId === targetEntityId ? TARGET_ENTITY_BONUS : 1;
+    const score = pos.w * pos.h * centerBonus * targetBonus / (1 + nearestDist * 0.5);
+
+    if (best === null || score > best.score) {
+      if (best) {
+        if (best.score > runnerScore) {
+          runnerScore = best.score;
+          runnerId = best.entityId;
+        }
+      }
+      best = { entityId, rect: pos, score };
+    } else if (score > runnerScore) {
+      runnerScore = score;
+      runnerId = entityId;
     }
   }
 
-  return bestFace;
+  if (best && runnerId !== null) {
+    best.runnerUp = { entityId: runnerId, score: runnerScore };
+  }
+  return best;
+}
+
+function cosineDistanceBetween(
+  a: number[] | undefined,
+  b: number[] | undefined,
+): number | null {
+  if (!a || !b || a.length !== b.length) return null;
+  let dot = 0; let na = 0; let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 1;
+  const sim = Math.max(-1, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb))));
+  return Number((1 - sim).toFixed(4));
 }
 
 export async function renderAllClips(
@@ -476,7 +609,9 @@ export async function renderAllClips(
   faceData: FaceDetectionResult,
   speakerFaceMap: SpeakerFaceMapping,
   exportOptions: ExportOptions,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
+  personData?: IdentityClusterResult,
+  debugTracking: boolean = false,
 ): Promise<string[]> {
   const outputPaths: string[] = [];
 
@@ -496,6 +631,8 @@ export async function renderAllClips(
       speakerFaceMap,
       faceData,
       transcript,
+      personData,
+      debugTracking,
     };
 
     await renderClip(job, onProgress);

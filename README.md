@@ -10,12 +10,14 @@ There are two ways to use it:
 ## What it does
 
 - Transcribes audio with word-level timestamps (Whisper)
-- Detects and tracks faces throughout the video (OpenCV)
+- Detects and tracks faces throughout the video, clustering them into persistent person identities
 - Uses Claude to identify the most viral-worthy moments
 - Renders 9:16 vertical clips that dynamically follow the active speaker's face
 - Burns in styled captions with selectable theme presets
 - Lets you choose between **fullscreen** and **centered** (half-height with black bars) framing
-- Exports everything to a folder with metadata and viral scores
+- **Analyze-only mode**: skip rendering entirely and just get a `viral_moments.json` with exact timestamps, so you can cut the clips yourself
+- Captions an existing clip you already cut — no API key needed
+- Resumes interrupted runs from checkpoints, so a crash never re-bills the API
 
 ## Prerequisites
 
@@ -134,6 +136,25 @@ shards-cli process /path/to/video.mp4 \
 | `--no-captions` | — | Disable caption overlay |
 | `-m, --model <size>` | small | Whisper model |
 | `-l, --language <code>` | en | Language code |
+| `--analyze-only` | — | Timestamps only — no face tracking, no rendering (see below) |
+| `--end-padding <sec>` | 0.6 | Breathing room added after each clip's ending |
+| `--soft-cap-ratio <ratio>` | 1.5 | Clips may overrun max-duration up to this multiple for the payoff |
+| `--no-strict-completeness` | — | Keep clips Claude flagged as incomplete (default: drop them) |
+| `--no-identity-tracking` | — | Fall back to the legacy Haar face tracker |
+| `--debug-tracking` | — | Write a `<clip>_tracking.json` sidecar per clip with per-keyframe scoring |
+| `--no-resume` | — | Ignore cached checkpoints and recompute from scratch |
+
+### Analyze only — just the timestamps
+
+Want to cut the clips yourself? `--analyze-only` runs transcription and the Claude viral analysis, then writes the timestamps and stops — no face tracking, no rendering, no framing prompt:
+
+```bash
+shards-cli process /path/to/video.mp4 --analyze-only
+```
+
+This writes `viral_moments.json` to the output directory with, for each moment: start/end in seconds **and** editor-ready timecodes (`HH:MM:SS.s`), viral score, title, category, the reason it was picked, transcript text, speakers, and hashtag keywords. The console also prints each moment's time range next to its score.
+
+API cost is the same as a full run (the analysis step is the only thing that bills Anthropic — everything else is local), but you skip all the face-tracking compute and any auto-crop mistakes. Pair it with `shards-cli caption` to caption your hand-cut clips for free.
 
 ### Caption an existing clip (free, no API)
 
@@ -142,6 +163,9 @@ Already have a short-form clip and just want Shards-style captions on it? Skip t
 ```bash
 # CLI
 shards-cli caption /path/to/clip.mp4 --theme matrix --position bottom
+
+# Optional styling overrides
+shards-cli caption clip.mp4 --font-size 96 --words-per-group 2
 
 # TUI
 shards
@@ -168,35 +192,36 @@ shards-cli config --words-per-group 2
 
 ## Output
 
-Each run produces a folder containing:
+A full run produces a folder of ready-to-post mp4s (captions are burned in; no sidecar files):
 
 ```
 video_name/
   clip_001_catchy_title.mp4
   clip_002_another_title.mp4
   ...
-  clip_001_captions.ass        # Subtitle source
-  clip_002_captions.ass
-  clips_metadata.json          # Full metadata for all clips
+  .shards/                     # Resume checkpoints (transcript, faces, analysis)
 ```
 
-`clips_metadata.json` includes for each clip:
+An `--analyze-only` run produces `viral_moments.json` instead of mp4s, containing for each moment:
 
-- Title, start/end timestamps, duration
+- Title, start/end in seconds plus `HH:MM:SS.s` timecodes, duration
 - Viral score (0–100)
 - Category (hot_take, humor, insight, revelation, etc.)
 - Reason it was selected
 - Full transcript text and speaker labels
 - Suggested hashtag keywords
 
+The hidden `.shards/` folder lets interrupted or repeated runs reuse the transcript, face data, and Claude analysis instead of recomputing (or re-billing) them. Delete it — or pass `--no-resume` — to force a clean run.
+
 ## How it works
 
 1. **Transcribe** — Whisper generates word-level timestamps with speaker diarization.
-2. **Face detection** — OpenCV Haar cascades track faces across sampled frames.
-3. **Speaker–face mapping** — Correlates speaker segments with detected face positions.
-4. **Viral analysis** — Claude scores moments for hook strength, emotional intensity, shareability.
-5. **Render** — FFmpeg crops to 9:16 (or 9:8 in centered mode), dynamically following the largest visible face with smooth keyframe interpolation.
-6. **Captions** — ASS subtitles with karaoke-style word emphasis, burned in via libass.
+2. **Face detection** — MTCNN detects faces with landmarks and identity embeddings across sampled frames (`--no-identity-tracking` falls back to OpenCV Haar cascades).
+3. **Identity clustering** — Embeddings are clustered into persistent person identities, filtering out transient faces (ads, posters, b-roll).
+4. **Speaker–face mapping** — Correlates speaker segments with persons via lip-movement activity.
+5. **Viral analysis** — Claude scores moments for hook strength, emotional intensity, shareability. This is the only step that calls the Anthropic API; `--analyze-only` stops here and writes the timestamps.
+6. **Render** — FFmpeg crops to 9:16 (or 9:8 in centered mode), dynamically following the active speaker with smooth keyframe interpolation and camera-cut detection.
+7. **Captions** — ASS subtitles with karaoke-style word emphasis, burned in via libass.
 
 ## Whisper models
 

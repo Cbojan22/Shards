@@ -19,11 +19,23 @@ export interface TranscriptResult {
   duration: number;
 }
 
+export interface FaceLandmarks {
+  leftEye: [number, number];
+  rightEye: [number, number];
+  nose: [number, number];
+  mouthLeft: [number, number];
+  mouthRight: [number, number];
+}
+
 export interface FaceAppearance {
   time: number;
   bbox: [number, number, number, number];
   lip_movement: number;
   position: 'left' | 'right' | 'center';
+  // Present when MTCNN-based detection ran (useIdentityTracking on). Old Haar
+  // path leaves these undefined; downstream code must guard.
+  embedding?: number[];
+  landmarks?: FaceLandmarks;
 }
 
 export interface FaceData {
@@ -40,9 +52,62 @@ export interface FaceDetectionResult {
   duration: number;
 }
 
+// A persistent person identity stitched together by clustering face embeddings
+// across the whole video. Solves the "same person appears in N separate Haar
+// tracks" problem and lets us reject transient ad/poster faces by screen time.
+export interface Person {
+  personId: string;
+  appearances: FaceAppearance[];
+  total_screen_time: number;
+  first_seen: number;
+  last_seen: number;
+  // Mean of this person's appearance embeddings — used as the cluster centroid
+  // for cross-clip matching and as the comparison anchor in debug-tracking.
+  centroid_embedding?: number[];
+}
+
+export interface IdentityClusterResult {
+  persons: Record<string, Person>;
+  cosine_threshold: number;
+  min_screen_time_seconds: number;
+  // Total faces dropped because their cluster fell under min_screen_time —
+  // this is the count we report when the data drives a threshold change.
+  filtered_short_lived: number;
+}
+
+// Maps a transcript speaker to a tracked entity. When useIdentityTracking is
+// on, mapping values are personId strings (from IdentityClusterResult). When
+// it's off, mapping values are faceId strings (from FaceDetectionResult).
+// Consumers shouldn't care which — both look up via the same key.
 export interface SpeakerFaceMapping {
   mapping: Record<string, string>;
   confidence: Record<string, number>;
+}
+
+// Per-keyframe debug record written when --debug-tracking is on. Scoped down
+// from the larger sidecar that was reverted on 2026-05-18 — just enough to
+// pick thresholds from observed value ranges per
+// [[shards-no-heuristic-fixes-without-data]].
+export interface TrackingDebugEntry {
+  time: number;
+  speaker: string | null;
+  mappedTargetId: string | null;
+  pickedId: string | null;
+  pickedScore: number;
+  runnerUpId: string | null;
+  runnerUpScore: number;
+  speakerConfidence: number;
+  lipMovement: number;
+  embeddingDistance: number | null;
+  bbox: [number, number, number, number] | null;
+}
+
+export interface TrackingDebugRecord {
+  clipId: string;
+  clipTitle: string;
+  videoFormat: 'fullscreen' | 'centered';
+  useIdentityTracking: boolean;
+  entries: TrackingDebugEntry[];
 }
 
 export interface ViralClip {
@@ -63,6 +128,12 @@ export interface ViralAnalysisResult {
   clips: ViralClip[];
   totalAnalyzed: number;
   videoTitle: string;
+  /**
+   * True when at least one chunk failed during analysis. Partial results are
+   * still returned (so users see what succeeded) but the resume layer refuses
+   * to reuse them — re-running should re-attempt the failed chunks.
+   */
+  partial?: boolean;
 }
 
 export interface CaptionStyle {
@@ -102,6 +173,12 @@ export interface ClipRenderJob {
   speakerFaceMap: SpeakerFaceMapping;
   faceData: FaceDetectionResult;
   transcript: TranscriptResult;
+  // Present when useIdentityTracking is on. Renderer keys tracking on
+  // personId rather than per-frame faceId. Absent → old Haar path.
+  personData?: IdentityClusterResult;
+  // When true, the renderer writes a <clip>_tracking.json sidecar alongside
+  // the mp4. Off by default — controlled by --debug-tracking on shards-cli.
+  debugTracking?: boolean;
 }
 
 export interface PipelineConfig {
@@ -121,6 +198,31 @@ export interface PipelineConfig {
   softCapRatio?: number;
   /** When true, drop clips Claude flagged as incomplete or trail-off endings. Default true. */
   strictCompleteness?: boolean;
+  /**
+   * Use MTCNN + embedding-based identity tracking. Default true. Set false to
+   * fall back to the old Haar-cascade per-frame pipeline (kept until two
+   * confirmed-good real-world clips against the new path).
+   */
+  useIdentityTracking?: boolean;
+  /**
+   * Write a <clip>_tracking.json sidecar with per-keyframe scoring. Off by
+   * default; used for the data-driven verification required by the
+   * no-heuristic-fixes-without-data rule.
+   */
+  debugTracking?: boolean;
+  /**
+   * When true, ignore any existing transcript/faces checkpoints in the output
+   * dir and recompute from scratch. Default false — resume is automatic when
+   * cached checkpoints match the current input + relevant config.
+   */
+  noResume?: boolean;
+  /**
+   * Analyze-only mode: transcribe + viral analysis, then write
+   * viral_moments.json with timestamps and stop. Skips face detection,
+   * identity clustering, speaker mapping, and rendering entirely — for users
+   * who cut the clips themselves and only need to know where the moments are.
+   */
+  analyzeOnly?: boolean;
 }
 
 export interface PipelineProgress {

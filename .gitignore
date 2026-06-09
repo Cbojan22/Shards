@@ -13,3 +13,4 @@ config/clipper.json
 .claude/
 .claude-flow/
 .mcp.json
+scripts/__pycache__/
