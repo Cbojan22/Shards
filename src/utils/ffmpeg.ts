@@ -124,10 +124,11 @@ export async function renderClipWithReframe(job: {
   const cropW = job.cropKeyframes[0]?.w || 608;
   const cropH = job.cropKeyframes[0]?.h || 1080;
 
-  // FFmpeg 8.1's expression evaluator silently rejects crop-x expressions
-  // past ~3300 chars. buildCropExpression now collapses constant runs, so
-  // 120 keyframes of *actual motion* (~25-35 chars/term) sits comfortably
-  // under that ceiling; static stretches no longer count toward the budget.
+  // FFmpeg 8.x silently rejects crop-x expressions past ~3600 chars (the parse
+  // fails at config time with "Failed to configure input pad"). Cap the
+  // keyframe density here for a sane starting point; buildCropExpression then
+  // enforces a hard character budget, thinning further when continuous motion
+  // would otherwise overflow it.
   const maxKf = 120;
   let kfs = job.cropKeyframes;
   if (kfs.length > maxKf) {
@@ -361,7 +362,17 @@ export async function burnCaptions(opts: {
   return { usedAssFilter: hasAss };
 }
 
-function buildCropExpression(
+// FFmpeg 8.x's av_expr_parse rejects crop expressions past ~3600 chars:
+// empirically a 3580-char crop-x parses but 3618 fails at config time with
+// "Failed to configure input pad" (AVERROR(EINVAL) / -22), aborting the render
+// before a single frame is written. Keyframe count alone does NOT bound the
+// length — a clip whose subject moves on nearly every keyframe collapses almost
+// no constant runs, so even the 120-keyframe cap can yield a 4300+ char
+// expression. We enforce a hard character budget with generous headroom below
+// the cliff and decimate further until the expression fits.
+const MAX_CROP_EXPR_CHARS = 3000;
+
+export function buildCropExpression(
   keyframes: Array<{ time: number; x: number; y: number; w: number; h: number }>,
   axis: 'x' | 'y'
 ): string {
@@ -370,15 +381,36 @@ function buildCropExpression(
 
   const sorted = [...keyframes].sort((a, b) => a.time - b.time);
 
-  // Matched to renderClipWithReframe's 120 cap.
-  const step = sorted.length > 120 ? Math.ceil(sorted.length / 120) : 1;
-  const downsampled = sorted.filter((_, i) => i % step === 0 || i === sorted.length - 1);
+  // Start at the 120-keyframe density, then keep thinning (larger stride =>
+  // fewer terms => shorter expression) until we clear FFmpeg's parse limit.
+  // Halting is guaranteed: once stride >= length the expression collapses to
+  // first+last, which is trivially short.
+  let stride = sorted.length > 120 ? Math.ceil(sorted.length / 120) : 1;
+  let expr = buildFlatSum(sorted, axis, stride);
+  while (expr.length > MAX_CROP_EXPR_CHARS && stride < sorted.length) {
+    stride++;
+    expr = buildFlatSum(sorted, axis, stride);
+  }
+  return expr;
+}
+
+// Build the flat sum-of-masked-segments crop expression for one axis, keeping
+// every `stride`-th keyframe (plus the last). Factored out of buildCropExpression
+// so the caller can retry with a larger stride when the result overflows
+// FFmpeg's expression-length limit.
+function buildFlatSum(
+  sorted: Array<{ time: number; x: number; y: number; w: number; h: number }>,
+  axis: 'x' | 'y',
+  stride: number
+): string {
+  const downsampled = stride > 1
+    ? sorted.filter((_, i) => i % stride === 0 || i === sorted.length - 1)
+    : sorted;
 
   // Collapse interior keyframes whose axis value matches both neighbours.
   // A clip that pans off a face for the second half ends with dozens of
   // identical `K*gte(t,N)*lt(t,N+.5)` terms; without this, the expression
-  // blows past the FFmpeg eval cap (~3300 chars on 8.x) even though the
-  // motion is trivially encodable as a single constant.
+  // wastes its budget encoding motion that's trivially a single constant.
   const sampled: typeof downsampled = [];
   for (let i = 0; i < downsampled.length; i++) {
     const v = Math.round(downsampled[i][axis]);
@@ -387,6 +419,8 @@ function buildCropExpression(
     if (prev !== null && next !== null && v === prev && v === next) continue;
     sampled.push(downsampled[i]);
   }
+
+  if (sampled.length === 1) return String(Math.round(sampled[0][axis]));
 
   // The old implementation built a right-nested if(lt(t,t1),seg,if(lt(t,t2),...))
   // chain. FFmpeg's expression evaluator hard-fails ("Missing ')' or too many
