@@ -9,7 +9,7 @@ import {
   type CaptionTheme,
 } from './captions/themes.js';
 import { hexToASS, formatASSTime } from './captions/index.js';
-import { runFFmpeg } from '../utils/ffmpeg.js';
+import { runFFmpeg, bundledFontsFilterSuffix } from '../utils/ffmpeg.js';
 
 // Renders one mp4 that walks through every caption theme back-to-back. Each
 // theme gets its own segment with the theme name banner and a short karaoke
@@ -114,7 +114,7 @@ async function renderSegment({
   // Filter goes through a script file because the ASS path can contain
   // characters (colons, commas) that ffmpeg's -vf parser splits on.
   const filterScript = path.join(tmpdir(), `shards_preview_${randomUUID()}.txt`);
-  await writeFile(filterScript, `ass=${assPath.replace(/:/g, '\\:')}`);
+  await writeFile(filterScript, `ass=${assPath.replace(/:/g, '\\:')}${bundledFontsFilterSuffix()}`);
 
   const encoder = process.platform === 'darwin'
     ? ['-c:v', 'h264_videotoolbox', '-b:v', '8M']

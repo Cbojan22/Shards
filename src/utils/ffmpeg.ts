@@ -1,6 +1,37 @@
 import ffmpeg from 'fluent-ffmpeg';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
+import { existsSync } from 'fs';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
+
+// Bundled caption fonts live at <repo>/assets/fonts. This file compiles to
+// dist/utils/ffmpeg.js, so ../../assets/fonts resolves to the repo root under
+// both the src and dist layouts (same trick utils/python.ts uses for scripts/).
+const BUNDLED_FONTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../assets/fonts');
+
+/** The bundled-fonts dir, or undefined if it isn't present at runtime. */
+function bundledFontsDir(): string | undefined {
+  return existsSync(BUNDLED_FONTS_DIR) ? BUNDLED_FONTS_DIR : undefined;
+}
+
+/**
+ * Build the `:fontsdir=…` suffix for the libass `ass` filter so it can resolve
+ * our bundled .ttf faces. Colons are escaped like the subtitle path; empty
+ * when no dir is given so we never hand ffmpeg a bogus fontsdir.
+ */
+function fontsDirArg(fontsDir?: string): string {
+  return fontsDir ? `:fontsdir=${fontsDir.replace(/:/g, '\\:')}` : '';
+}
+
+/**
+ * `:fontsdir=…` suffix for the bundled caption fonts, ready to append after an
+ * `ass=<path>` filter so libass can resolve them. Empty when the dir is absent.
+ * Exported for other burn sites (e.g. the themes preview) to stay consistent.
+ */
+export function bundledFontsFilterSuffix(): string {
+  return fontsDirArg(bundledFontsDir());
+}
 
 export interface VideoMetadata {
   duration: number;
@@ -207,7 +238,10 @@ export async function renderClipWithReframe(job: {
     if (hasAssFilter) {
       // Burn in with ASS filter
       const subFilterPath = join(tmpdir(), `shards_sub_${randomUUID()}.txt`);
-      await writeFile(subFilterPath, `ass=${job.subtitlePath.replace(/:/g, '\\:')}`);
+      await writeFile(
+        subFilterPath,
+        `ass=${job.subtitlePath.replace(/:/g, '\\:')}${fontsDirArg(bundledFontsDir())}`,
+      );
       const subArgs = [
         '-y', '-i', step1Output,
         '-filter_script:v', subFilterPath,
@@ -294,6 +328,8 @@ export interface BuildBurnCaptionsArgsParams {
   quality: 'high' | 'medium' | 'low';
   platform: NodeJS.Platform;
   useAssFilter: boolean;
+  /** Extra font directory for libass (bundled caption fonts). */
+  fontsDir?: string;
 }
 
 /**
@@ -314,7 +350,7 @@ export function buildBurnCaptionsArgs(p: BuildBurnCaptionsArgsParams): string[] 
     return [
       '-y',
       '-i', p.inputPath,
-      '-vf', `ass=${escapedSub}`,
+      '-vf', `ass=${escapedSub}${fontsDirArg(p.fontsDir)}`,
       ...encoder,
       '-c:a', 'copy',
       '-movflags', '+faststart',
@@ -357,6 +393,7 @@ export async function burnCaptions(opts: {
     quality: opts.quality,
     platform: process.platform,
     useAssFilter: hasAss,
+    fontsDir: bundledFontsDir(),
   });
   await runFFmpeg(args);
   return { usedAssFilter: hasAss };

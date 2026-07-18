@@ -16,7 +16,17 @@ export type CaptionThemeId =
   | 'amber'
   | 'magazine'
   | 'notebook'
-  | 'vapor';
+  | 'vapor'
+  // Bundled Opus-Clip fonts (ship as .ttf in assets/fonts, burned via libass
+  // fontsdir). White + gold on black — the classic look, one per typeface.
+  | 'anton'
+  | 'bebas'
+  | 'montserrat'
+  | 'poppins'
+  | 'archivo'
+  | 'league'
+  | 'roboto'
+  | 'inter';
 
 export interface CaptionTheme {
   id: CaptionThemeId;
@@ -279,6 +289,131 @@ export const CAPTION_THEMES: Record<CaptionThemeId, CaptionTheme> = {
     bold: true,
     swatchFg: '#FF71CE',
     swatchBg: '#050546',
+  },
+
+  // ── Bundled font options (Opus-Clip fonts) ──────────────────────────────
+  // Each is the classic white + gold-emphasis look on a different bundled
+  // typeface. `bold` is false because the .ttf files are baked at their heavy
+  // display weight — ASS bold would fake-embolden and muddy them.
+  anton: {
+    id: 'anton',
+    name: 'Anton',
+    tagline: 'Heavy condensed — the viral / Hormozi caption look.',
+    fontFamily: 'Anton',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FFD700',
+    accentColor: '#00D4FF',
+    outlineColor: '#000000',
+    shadowColor: '#000000',
+    outlineWidth: 5,
+    bold: false,
+    swatchFg: '#FFD700',
+    swatchBg: '#000000',
+  },
+  bebas: {
+    id: 'bebas',
+    name: 'Bebas Neue',
+    tagline: 'Tall condensed all-caps — sports & fitness energy.',
+    fontFamily: 'Bebas Neue',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FFD700',
+    accentColor: '#00D4FF',
+    outlineColor: '#000000',
+    shadowColor: '#000000',
+    outlineWidth: 5,
+    bold: false,
+    swatchFg: '#FFD700',
+    swatchBg: '#000000',
+  },
+  montserrat: {
+    id: 'montserrat',
+    name: 'Montserrat',
+    tagline: 'Bold geometric sans — clean, modern, versatile.',
+    fontFamily: 'Montserrat Black',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FFD700',
+    accentColor: '#00D4FF',
+    outlineColor: '#000000',
+    shadowColor: '#000000',
+    outlineWidth: 5,
+    bold: false,
+    swatchFg: '#FFD700',
+    swatchBg: '#000000',
+  },
+  poppins: {
+    id: 'poppins',
+    name: 'Poppins',
+    tagline: 'Rounded geometric — friendly, lifestyle & beauty.',
+    fontFamily: 'Poppins ExtraBold',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FFD700',
+    accentColor: '#00D4FF',
+    outlineColor: '#000000',
+    shadowColor: '#000000',
+    outlineWidth: 5,
+    bold: false,
+    swatchFg: '#FFD700',
+    swatchBg: '#000000',
+  },
+  archivo: {
+    id: 'archivo',
+    name: 'Archivo Black',
+    tagline: 'Chunky grotesque — loud, bold statements.',
+    fontFamily: 'Archivo Black',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FFD700',
+    accentColor: '#00D4FF',
+    outlineColor: '#000000',
+    shadowColor: '#000000',
+    outlineWidth: 5,
+    bold: false,
+    swatchFg: '#FFD700',
+    swatchBg: '#000000',
+  },
+  league: {
+    id: 'league',
+    name: 'League Spartan',
+    tagline: 'Modern geometric — tech & finance clean.',
+    fontFamily: 'League Spartan Black',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FFD700',
+    accentColor: '#00D4FF',
+    outlineColor: '#000000',
+    shadowColor: '#000000',
+    outlineWidth: 5,
+    bold: false,
+    swatchFg: '#FFD700',
+    swatchBg: '#000000',
+  },
+  roboto: {
+    id: 'roboto',
+    name: 'Roboto',
+    tagline: 'Neutral grotesque — news & explainer clean.',
+    fontFamily: 'Roboto Black',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FFD700',
+    accentColor: '#00D4FF',
+    outlineColor: '#000000',
+    shadowColor: '#000000',
+    outlineWidth: 5,
+    bold: false,
+    swatchFg: '#FFD700',
+    swatchBg: '#000000',
+  },
+  inter: {
+    id: 'inter',
+    name: 'Inter',
+    tagline: 'Minimal UI-grade sans — design & premium.',
+    fontFamily: 'Inter Black',
+    primaryColor: '#FFFFFF',
+    highlightColor: '#FFD700',
+    accentColor: '#00D4FF',
+    outlineColor: '#000000',
+    shadowColor: '#000000',
+    outlineWidth: 5,
+    bold: false,
+    swatchFg: '#FFD700',
+    swatchBg: '#000000',
   },
 };
 

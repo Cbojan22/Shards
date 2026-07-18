@@ -73,6 +73,33 @@ describe('buildBurnCaptionsArgs', () => {
     expect(vf).toContain('foo\\:bar');
   });
 
+  it('appends fontsdir to the ass filter so libass finds bundled fonts', () => {
+    const args = buildBurnCaptionsArgs({
+      inputPath: '/tmp/in.mp4',
+      subtitlePath: '/tmp/in.ass',
+      outputPath: '/tmp/out.mp4',
+      quality: 'high',
+      platform: 'darwin',
+      useAssFilter: true,
+      fontsDir: '/repo/assets/fonts',
+    });
+    const vf = args[args.indexOf('-vf') + 1];
+    expect(vf).toBe('ass=/tmp/in.ass:fontsdir=/repo/assets/fonts');
+  });
+
+  it('omits fontsdir when no fonts dir is provided', () => {
+    const args = buildBurnCaptionsArgs({
+      inputPath: '/tmp/in.mp4',
+      subtitlePath: '/tmp/in.ass',
+      outputPath: '/tmp/out.mp4',
+      quality: 'high',
+      platform: 'darwin',
+      useAssFilter: true,
+    });
+    const vf = args[args.indexOf('-vf') + 1];
+    expect(vf).toBe('ass=/tmp/in.ass');
+  });
+
   it('falls back to mov_text soft subtitles when libass is unavailable', () => {
     const args = buildBurnCaptionsArgs({
       inputPath: '/tmp/in.mp4',
