@@ -113,6 +113,7 @@ export function App({ initialApiKey }: AppProps): React.ReactElement {
         <Wizard
           mode={screen.mode}
           initial={initial}
+          outputBaseDir={config.outputDir}
           onCancel={() => setScreen({ kind: 'menu' })}
           onSubmit={async (answers) => {
             // Always persist the latest answers so they become the new

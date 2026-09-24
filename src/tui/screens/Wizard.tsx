@@ -10,6 +10,7 @@ import TextInput from 'ink-text-input';
 import SelectInput from 'ink-select-input';
 import { Frame } from '../components/Frame.js';
 import { TUI } from '../theme.js';
+import { defaultClipOutputDir } from '../../utils/config.js';
 import {
   CAPTION_THEMES,
   CAPTION_THEME_IDS,
@@ -39,6 +40,8 @@ export interface WizardAnswers {
 interface WizardProps {
   mode: WizardMode;
   initial: WizardAnswers;
+  /** Saved base folder for clip runs ('' = next to the input). */
+  outputBaseDir: string;
   onCancel: () => void;
   onSubmit: (answers: WizardAnswers) => void;
 }
@@ -74,7 +77,7 @@ const ALL_STEPS: StepKey[] = [
   'confirm',
 ];
 
-export function Wizard({ mode, initial, onCancel, onSubmit }: WizardProps): React.ReactElement {
+export function Wizard({ mode, initial, outputBaseDir, onCancel, onSubmit }: WizardProps): React.ReactElement {
   const [answers, setAnswers] = useState<WizardAnswers>(initial);
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -122,6 +125,7 @@ export function Wizard({ mode, initial, onCancel, onSubmit }: WizardProps): Reac
       {renderStep({
         key: currentKey,
         answers,
+        outputBaseDir,
         update,
         advance,
         onSubmit,
@@ -161,6 +165,7 @@ function renderProgressBar(step: number, total: number): string {
 interface StepCtx {
   key: StepKey;
   answers: WizardAnswers;
+  outputBaseDir: string;
   update: <K extends keyof WizardAnswers>(k: K, v: WizardAnswers[K]) => void;
   advance: () => void;
   onSubmit: (a: WizardAnswers) => void;
@@ -225,7 +230,10 @@ function PathStep({ ctx }: { ctx: StepCtx }) {
 
 function OutputDirStep({ ctx }: { ctx: StepCtx }) {
   const [value, setValue] = useState(ctx.answers.outputDir);
-  const fallback = useMemo(() => deriveDefaultOutput(ctx.answers.inputPath), [ctx.answers.inputPath]);
+  const fallback = useMemo(
+    () => deriveDefaultOutput(ctx.answers.inputPath, ctx.outputBaseDir),
+    [ctx.answers.inputPath, ctx.outputBaseDir],
+  );
 
   const onSubmit = (raw: string) => {
     const trimmed = raw.trim();
@@ -481,7 +489,7 @@ function ConfirmStep({ ctx }: { ctx: StepCtx }) {
 
   return (
     <Frame title="review" subtitle="press enter on the highlighted action">
-      <Summary answers={ctx.answers} />
+      <Summary answers={ctx.answers} outputBaseDir={ctx.outputBaseDir} />
       <Box marginTop={1}>
         <SelectInput
           items={choices}
@@ -495,10 +503,10 @@ function ConfirmStep({ ctx }: { ctx: StepCtx }) {
   );
 }
 
-function Summary({ answers }: { answers: WizardAnswers }) {
+function Summary({ answers, outputBaseDir }: { answers: WizardAnswers; outputBaseDir: string }) {
   const rows: Array<[string, string]> = [
     ['input',         answers.inputPath || '(not used in defaults mode)'],
-    ['output',        answers.outputDir || `default (~/iCloud/Snag/<name>)`],
+    ['output',        answers.outputDir || `default (${deriveDefaultOutput(answers.inputPath, outputBaseDir)})`],
     ['whisper',       answers.whisperModel],
     ['clip range',    `${answers.minClipDuration}–${answers.maxClipDuration}s, max ${answers.maxClips}`],
     ['quality',       answers.quality],
@@ -520,9 +528,7 @@ function Summary({ answers }: { answers: WizardAnswers }) {
   );
 }
 
-function deriveDefaultOutput(inputPath: string): string {
-  if (!inputPath) return '~/iCloud/Snag/<name>';
-  const base = path.basename(inputPath, path.extname(inputPath));
-  const home = process.env.HOME || '~';
-  return path.join(home, 'Library/Mobile Documents/com~apple~CloudDocs/Snag', base);
+function deriveDefaultOutput(inputPath: string, outputBaseDir: string): string {
+  if (!inputPath) return outputBaseDir ? path.join(outputBaseDir, '<name>') : '<input folder>/<name>_clips';
+  return defaultClipOutputDir(inputPath, outputBaseDir);
 }

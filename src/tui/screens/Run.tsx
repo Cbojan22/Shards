@@ -12,7 +12,7 @@ import { isPythonSetup, setupPython } from '../../utils/python.js';
 import { applyTheme } from '../../pipeline/captions/themes.js';
 import type { PipelineConfig } from '../../types/index.js';
 import type { WizardAnswers } from './Wizard.js';
-import type { UserConfig } from '../../utils/config.js';
+import { defaultClipOutputDir, type UserConfig } from '../../utils/config.js';
 
 interface RunProps {
   answers: WizardAnswers;
@@ -93,7 +93,7 @@ export function Run({ answers, baseConfig, apiKey, onDone }: RunProps): React.Re
     (async () => {
       try {
         // Resolve output dir — the wizard accepts blank to mean "default".
-        const outputDir = answers.outputDir || (await deriveDefaultOutput(answers.inputPath));
+        const outputDir = answers.outputDir || defaultClipOutputDir(answers.inputPath, baseConfig.outputDir);
 
         // Make sure the source video still exists. The wizard validated it
         // when entered, but the user could have moved it since.
@@ -235,15 +235,3 @@ function formatElapsed(seconds: number): string {
   return `${m}m ${String(s).padStart(2, '0')}s`;
 }
 
-async function deriveDefaultOutput(inputPath: string): Promise<string> {
-  const base = path.basename(inputPath, path.extname(inputPath));
-  const home = process.env.HOME;
-  if (!home) return path.join(path.dirname(inputPath), `${base}_clips`);
-  const icloudSnag = path.join(home, 'Library/Mobile Documents/com~apple~CloudDocs/Snag');
-  try {
-    await access(path.dirname(icloudSnag));
-    return path.join(icloudSnag, base);
-  } catch {
-    return path.join(path.dirname(inputPath), `${base}_clips`);
-  }
-}

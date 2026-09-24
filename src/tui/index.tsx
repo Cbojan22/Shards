@@ -20,9 +20,11 @@ async function loadDotEnvUpwards(): Promise<void> {
         if (!line || line.startsWith('#')) continue;
         const eq = line.indexOf('=');
         if (eq === -1) continue;
+        // Only import the API key — other vars would leak into spawned
+        // python/ffmpeg processes.
         const key = line.slice(0, eq).trim();
-        const val = line.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
-        if (!process.env[key]) process.env[key] = val;
+        if (key !== 'ANTHROPIC_API_KEY') continue;
+        process.env[key] = line.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
       }
       return;
     } catch {

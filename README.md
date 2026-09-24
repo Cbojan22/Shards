@@ -125,7 +125,7 @@ shards-cli process /path/to/video.mp4 \
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-o, --output <dir>` | iCloud/Snag/<name> or input dir | Output directory |
+| `-o, --output <dir>` | `<input>_clips` next to the input, or `<outputDir>/<name>` if set via `shards-cli config --output-dir` | Output directory |
 | `--max-clips <n>` | 20 | Maximum clips to generate |
 | `--min-duration <sec>` | 15 | Minimum clip length |
 | `--max-duration <sec>` | 180 | Maximum clip length |
@@ -185,6 +185,7 @@ shards-cli config --show
 # Set defaults
 shards-cli config --quality medium
 shards-cli config --video-format centered
+shards-cli config --output-dir ~/Videos/Shards   # clips go to ~/Videos/Shards/<video name>
 shards-cli config --caption-theme cyberpunk
 shards-cli config --caption-position bottom
 shards-cli config --words-per-group 2

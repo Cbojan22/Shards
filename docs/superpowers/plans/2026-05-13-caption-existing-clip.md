@@ -110,7 +110,7 @@ describe('buildBurnCaptionsArgs', () => {
   it('escapes colons in the subtitle path so libass parses it as one arg', () => {
     const args = buildBurnCaptionsArgs({
       inputPath: '/tmp/in.mp4',
-      subtitlePath: '/Users/carter/Library/Mobile Documents/foo:bar/clip.ass',
+      subtitlePath: '/Users/someone/My Videos/foo:bar/clip.ass',
       outputPath: '/tmp/out.mp4',
       quality: 'high',
       platform: 'darwin',
@@ -1211,7 +1211,7 @@ Pick any short MP4 you already have (e.g. one Shards produced earlier). Run:
 
 ```bash
 npm run build
-node dist/cli/index.js caption ~/Library/Mobile\ Documents/com~apple~CloudDocs/Snag/<some-folder>/clip_001_<slug>.mp4 --theme matrix --position bottom
+node dist/cli/index.js caption path/to/clip_001_<slug>.mp4 --theme matrix --position bottom
 ```
 
 Expected:

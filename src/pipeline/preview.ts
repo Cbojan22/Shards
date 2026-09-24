@@ -41,8 +41,7 @@ const SAMPLES: CaptionSample[] = [
 export function defaultPreviewPath(): string {
   // Preview artifacts land inside the project repo (under `previews/`) so
   // the user can open them directly from their IDE — not in iCloud, not in
-  // a hidden folder. Rendered final clips still default to iCloud/Snag;
-  // previews are inspection artifacts and stay local.
+  // a hidden folder. Previews are inspection artifacts and stay local.
   // `import.meta.url` is the real path of this module after symlink
   // resolution, so this works whether shards-cli was invoked from the
   // project dir or via an `npm link`-installed global bin.

@@ -11,7 +11,7 @@ import { isPythonSetup, setupPython } from '../utils/python.js';
 import { applyTheme, CAPTION_THEME_IDS, type CaptionThemeId } from '../pipeline/captions/themes.js';
 import { generateThemesPreview, defaultPreviewPath } from '../pipeline/preview.js';
 import { captionExistingClip } from '../pipeline/captionOnly/index.js';
-import { loadConfig, saveConfig, configPath } from '../utils/config.js';
+import { loadConfig, saveConfig, configPath, defaultClipOutputDir } from '../utils/config.js';
 import type { PipelineConfig, CaptionOnlyOptions } from '../types/index.js';
 
 // Auto-load .env at the project root so users only need to set
@@ -25,9 +25,11 @@ async function loadDotEnv(): Promise<void> {
       if (!line || line.startsWith('#')) continue;
       const eq = line.indexOf('=');
       if (eq === -1) continue;
+      // Only import the API key — other vars would leak into spawned
+      // python/ffmpeg processes.
       const key = line.slice(0, eq).trim();
-      const val = line.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
-      if (!process.env[key]) process.env[key] = val;
+      if (key !== 'ANTHROPIC_API_KEY') continue;
+      process.env[key] = line.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
     }
   } catch {
     // No .env — fall back to config file / CLI flag / shell env.
@@ -97,7 +99,7 @@ const program = new Command();
 program
   .name('shards-cli')
   .description('Shards — scripted entry point for the AI viral clip generator (use `shards` for the TUI)')
-  .version('1.7.0');
+  .version('1.8.0');
 
 // === PROCESS COMMAND ===
 program
@@ -174,16 +176,9 @@ program
       }
       spinner.succeed('Python environment ready');
 
-      // Build output directory name — default to iCloud Drive/Snag/<video name> on macOS
-      const inputName = path.basename(inputPath, path.extname(inputPath));
-      const icloudSnag = process.env.HOME
-        ? path.join(process.env.HOME, 'Library/Mobile Documents/com~apple~CloudDocs/Snag')
-        : '';
-      const icloudAvailable = icloudSnag && await access(path.dirname(icloudSnag)).then(() => true).catch(() => false);
-      const defaultOutput = icloudAvailable
-        ? path.join(icloudSnag, inputName)
-        : path.join(path.dirname(inputPath), `${inputName}_clips`);
-      const outputDir = opts.output ? path.resolve(opts.output as string) : defaultOutput;
+      const outputDir = opts.output
+        ? path.resolve(opts.output as string)
+        : defaultClipOutputDir(inputPath, config.outputDir);
 
       // Pick the active theme: per-run override wins, else the saved default.
       const themeArg = opts.captionTheme as CaptionThemeId | undefined;
@@ -326,6 +321,7 @@ program
   .option('--quality <level>', 'Set default quality (high/medium/low)')
   .option('--format <fmt>', 'Set default format (mp4/mov/webm)')
   .option('--video-format <kind>', 'Set default video format (fullscreen/centered)')
+  .option('--output-dir <path>', 'Set base folder for clips (<path>/<video name>); "" = next to the input')
   .option('--caption-theme <id>', 'Set default caption theme (24 options — see README for the full list)')
   .option('--max-clips <n>', 'Set max clips per video')
   .option('--min-duration <sec>', 'Set minimum clip duration')
@@ -350,6 +346,11 @@ program
       console.warn(chalk.yellow('Warning: API key will be stored in plaintext in ~/.shards/config.json.'));
       console.warn(chalk.yellow('Prefer: export ANTHROPIC_API_KEY=your_key'));
       config.anthropicApiKey = opts.apiKey as string; changed = true;
+    }
+    if (opts.outputDir !== undefined) {
+      const dir = opts.outputDir as string;
+      config.outputDir = dir && !dir.startsWith('~/') ? path.resolve(dir) : dir;
+      changed = true;
     }
     if (opts.model) { config.whisperModel = opts.model as string; changed = true; }
     if (opts.language) { config.language = opts.language as string; changed = true; }
@@ -555,7 +556,7 @@ program
 program
   .command('preview')
   .description('Render an MP4 walking through every caption theme')
-  .option('-o, --output <path>', 'Where to save the preview MP4 (default: iCloud/Snag)')
+  .option('-o, --output <path>', 'Where to save the preview MP4 (default: previews/ in the repo)')
   .action(async (opts: Record<string, string>) => {
     const outPath = (opts.output as string) || defaultPreviewPath();
     const spinner = ora('Generating themes preview…').start();

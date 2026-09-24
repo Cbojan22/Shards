@@ -61,7 +61,7 @@ describe('buildBurnCaptionsArgs', () => {
   it('escapes colons in the subtitle path so libass parses it as one arg', () => {
     const args = buildBurnCaptionsArgs({
       inputPath: '/tmp/in.mp4',
-      subtitlePath: '/Users/carter/Library/Mobile Documents/foo:bar/clip.ass',
+      subtitlePath: '/Users/someone/My Videos/foo:bar/clip.ass',
       outputPath: '/tmp/out.mp4',
       quality: 'high',
       platform: 'darwin',

@@ -1,6 +1,6 @@
 import { homedir } from 'os';
 import path from 'path';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, chmod } from 'fs/promises';
 import type { CaptionStyle } from '../types/index.js';
 import { DEFAULT_CAPTION_STYLE } from '../pipeline/captions/index.js';
 import type { CaptionThemeId } from '../pipeline/captions/themes.js';
@@ -33,6 +33,8 @@ export interface UserConfig {
   useIdentityTracking: boolean;
   /** Write per-clip _tracking.json sidecars (off by default). */
   debugTracking: boolean;
+  /** Base folder for clip runs (<outputDir>/<video name>). '' = next to the input. */
+  outputDir: string;
 }
 
 export const DEFAULT_CONFIG: UserConfig = {
@@ -54,6 +56,7 @@ export const DEFAULT_CONFIG: UserConfig = {
   strictCompleteness: true,
   useIdentityTracking: true,
   debugTracking: false,
+  outputDir: '',
 };
 
 const CONFIG_DIR = process.env.SHARDS_CONFIG_DIR || path.join(homedir(), '.shards');
@@ -77,8 +80,22 @@ export async function loadConfig(): Promise<UserConfig> {
 }
 
 export async function saveConfig(config: UserConfig): Promise<void> {
-  await mkdir(CONFIG_DIR, { recursive: true });
-  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2));
+  // The config can hold an API key, so keep it owner-only. writeFile's mode
+  // only applies on create — chmod covers files written by older builds.
+  await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+  await chmod(CONFIG_PATH, 0o600);
+}
+
+/**
+ * Default output folder for a clip run: `<outputDir>/<video name>` when the
+ * user saved a base folder, else `<video name>_clips` next to the input.
+ */
+export function defaultClipOutputDir(inputPath: string, outputDir: string): string {
+  const name = path.basename(inputPath, path.extname(inputPath));
+  if (!outputDir) return path.join(path.dirname(inputPath), `${name}_clips`);
+  const base = outputDir.startsWith('~/') ? path.join(homedir(), outputDir.slice(2)) : outputDir;
+  return path.join(base, name);
 }
 
 export function cloneDefaults(): UserConfig {
