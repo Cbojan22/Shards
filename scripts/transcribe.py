@@ -106,19 +106,19 @@ def assign_speakers(segments, input_path):
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
             tmp_path = tmp.name
 
-        subprocess.run(
-            ['ffmpeg', '-y', '-i', input_path, '-ac', '1', '-ar', '16000',
-             '-t', '7200', tmp_path],
-            capture_output=True, timeout=300
-        )
-
         import wave
-        with wave.open(tmp_path, 'rb') as wf:
-            frames = wf.readframes(wf.getnframes())
-            audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-            sample_rate = wf.getframerate()
-
-        os.unlink(tmp_path)
+        try:
+            subprocess.run(
+                ['ffmpeg', '-y', '-i', input_path, '-ac', '1', '-ar', '16000',
+                 '-t', '7200', tmp_path],
+                capture_output=True, timeout=300
+            )
+            with wave.open(tmp_path, 'rb') as wf:
+                frames = wf.readframes(wf.getnframes())
+                audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                sample_rate = wf.getframerate()
+        finally:
+            os.unlink(tmp_path)
 
         current_speaker = 0
         speaker_change_threshold = 1.5

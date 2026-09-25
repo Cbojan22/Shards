@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import path from 'path';
 import { access } from 'fs/promises';
 import { Box, Static, Text, useInput } from 'ink';
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment

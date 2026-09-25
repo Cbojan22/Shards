@@ -69,8 +69,8 @@ describe('buildBurnCaptionsArgs', () => {
     });
 
     const vf = args[args.indexOf('-vf') + 1];
-    // libass requires \: for literal colons inside the filter string
-    expect(vf).toContain('foo\\:bar');
+    // Two escaping levels (option value + filtergraph) turn ':' into '\\:'
+    expect(vf).toContain('foo\\\\:bar');
   });
 
   it('appends fontsdir to the ass filter so libass finds bundled fonts', () => {

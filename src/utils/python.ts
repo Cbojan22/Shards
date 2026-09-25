@@ -21,10 +21,12 @@ export async function runPythonScript<T>(
   }
 
   return new Promise<T>((resolve, reject) => {
+    // The scripts never call Anthropic, so keep the API key out of their env.
+    const { ANTHROPIC_API_KEY: _omit, ...env } = process.env;
     const proc = spawn(pythonBin, [scriptPath, ...cliArgs], {
       cwd: SCRIPTS_DIR,
       env: {
-        ...process.env,
+        ...env,
         PYTHONUNBUFFERED: '1',
         // ctranslate2 (faster-whisper's backend) and torch both bring their
         // own libiomp5.dylib, which trips OMP Error #15 on macOS. This is

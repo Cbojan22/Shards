@@ -10,9 +10,3 @@ export const TUI = {
   fg: '#E6E6E6',       // off-white — body text
   muted: '#9CA3AF',    // muted gray — placeholder text
 } as const;
-
-export type TuiColorKey = keyof typeof TUI;
-
-// Gradient names supported by `gradient-string` (used by ink-gradient).
-// Picked so the SHARDS logo reads as moody/retro rather than rainbow.
-export const LOGO_GRADIENT = ['#00FF41', '#00D4FF', '#FF00FF'] as const;

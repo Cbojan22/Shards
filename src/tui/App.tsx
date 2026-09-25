@@ -145,6 +145,7 @@ export function App({ initialApiKey }: AppProps): React.ReactElement {
       const initial: CaptionWizardAnswers = {
         inputPath: '',
         outputPath: '',
+        whisperModel: config.whisperModel,
         captionTheme: config.captionTheme,
         captionPosition: config.captionStyle.position,
         captionFontSize: config.captionStyle.fontSize,
@@ -158,6 +159,8 @@ export function App({ initialApiKey }: AppProps): React.ReactElement {
             // Persist theme + style tweaks so subsequent runs default to them.
             const merged: UserConfig = {
               ...config,
+              // whisperModel is deliberately not saved: it's the clip-run
+              // default too, and a quick 'tiny' caption pass shouldn't change it.
               captionTheme: answers.captionTheme,
               captionStyle: {
                 ...config.captionStyle,

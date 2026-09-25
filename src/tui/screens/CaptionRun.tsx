@@ -94,7 +94,7 @@ export function CaptionRun({ answers, baseConfig, onDone }: CaptionRunProps): Re
           {
             inputPath: answers.inputPath,
             outputPath: answers.outputPath,
-            whisperModel: baseConfig.whisperModel,
+            whisperModel: answers.whisperModel,
             language: baseConfig.language,
             quality: baseConfig.quality,
             captionStyle,

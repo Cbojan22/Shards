@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import React from 'react';
 import path from 'path';
 import { readFile } from 'fs/promises';
 import { render } from 'ink';

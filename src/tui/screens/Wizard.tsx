@@ -9,6 +9,7 @@ import TextInput from 'ink-text-input';
 // @ts-ignore — ink-select-input ships its own loose types
 import SelectInput from 'ink-select-input';
 import { Frame } from '../components/Frame.js';
+import { WhisperModelStep } from '../components/WhisperModelStep.js';
 import { TUI } from '../theme.js';
 import { defaultClipOutputDir } from '../../utils/config.js';
 import {
@@ -255,25 +256,14 @@ function OutputDirStep({ ctx }: { ctx: StepCtx }) {
 }
 
 function ModelStep({ ctx }: { ctx: StepCtx }) {
-  const items = [
-    { label: 'tiny    — fastest, lowest quality',     value: 'tiny' },
-    { label: 'base    — quick, decent accuracy',      value: 'base' },
-    { label: 'small   — balanced (recommended)',      value: 'small' },
-    { label: 'medium  — slower, sharper transcripts', value: 'medium' },
-    { label: 'large   — slowest, most accurate',      value: 'large' },
-  ];
-  const initial = items.findIndex((i) => i.value === ctx.answers.whisperModel);
   return (
-    <Frame title="whisper model" subtitle="local transcription engine — bigger = slower + better">
-      <SelectInput
-        items={items}
-        initialIndex={initial >= 0 ? initial : 2}
-        onSelect={(item: { value: string }) => {
-          ctx.update('whisperModel', item.value);
-          ctx.advance();
-        }}
-      />
-    </Frame>
+    <WhisperModelStep
+      value={ctx.answers.whisperModel}
+      onSelect={(model) => {
+        ctx.update('whisperModel', model);
+        ctx.advance();
+      }}
+    />
   );
 }
 

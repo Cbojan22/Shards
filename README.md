@@ -79,7 +79,7 @@ Your latest answers always become the new defaults so the next run is faster.
 
 ### Caption themes
 
-Sixteen baked-in looks, each pairing a font with a colour palette. The wizard previews the highlighted theme inline before you commit. To see them all in motion, run `shards-cli preview` or pick **Preview themes** from the TUI menu.
+Twenty-four baked-in looks, each pairing a font with a colour palette (the last eight use bundled fonts, so they render the same on any machine). List them from the terminal with `shards-cli themes`. The wizard previews the highlighted theme inline before you commit. To see them all in motion, run `shards-cli preview` or pick **Preview themes** from the TUI menu.
 
 | Theme | Vibe | Font |
 |-------|------|------|
@@ -99,6 +99,14 @@ Sixteen baked-in looks, each pairing a font with a colour palette. The wizard pr
 | `magazine` | Didot serif with champagne gold — Vogue cover | Didot |
 | `notebook` | Marker Felt navy ink — handwritten margin notes | Marker Felt |
 | `vapor` | 80s vaporwave — pink + cyan + purple | Futura |
+| `anton` | Heavy condensed — the viral / Hormozi caption look | Anton |
+| `bebas` | Tall condensed all-caps — sports & fitness energy | Bebas Neue |
+| `montserrat` | Bold geometric sans — clean, modern, versatile | Montserrat Black |
+| `poppins` | Rounded geometric — friendly, lifestyle & beauty | Poppins ExtraBold |
+| `archivo` | Chunky grotesque — loud, bold statements | Archivo Black |
+| `league` | Modern geometric — tech & finance clean | League Spartan Black |
+| `roboto` | Neutral grotesque — news & explainer clean | Roboto Black |
+| `inter` | Minimal UI-grade sans — design & premium | Inter Black |
 
 ### Video format
 
@@ -120,7 +128,8 @@ shards-cli process /path/to/video.mp4 \
   --quality high \
   --format mp4 \
   --video-format centered \
-  --caption-theme matrix
+  --caption-theme anton \
+  --caption-position center
 ```
 
 | Option | Default | Description |
@@ -132,8 +141,11 @@ shards-cli process /path/to/video.mp4 \
 | `-q, --quality <level>` | high | Export quality (high/medium/low) |
 | `-f, --format <fmt>` | mp4 | Container format (mp4/mov/webm) |
 | `--video-format <kind>` | fullscreen | Layout (fullscreen/centered) |
-| `--caption-theme <id>` | golden | Caption theme (see table above) |
-| `--no-captions` | — | Disable caption overlay |
+| `--caption-theme <id>` | golden | Caption theme / font (see table above, or `shards-cli themes`) |
+| `--caption-position <pos>` | bottom | Caption position (top/center/bottom) |
+| `--font-size <px>` | 104 | Caption font size (24–240) |
+| `--words-per-group <n>` | 3 | Words shown per caption (1–5) |
+| `--captions` / `--no-captions` | on | Turn captions on or off for this run |
 | `-m, --model <size>` | small | Whisper model |
 | `-l, --language <code>` | en | Language code |
 | `--analyze-only` | — | Timestamps only — no face tracking, no rendering (see below) |
@@ -164,8 +176,9 @@ Already have a short-form clip and just want Shards-style captions on it? Skip t
 # CLI
 shards-cli caption /path/to/clip.mp4 --theme matrix --position bottom
 
-# Optional styling overrides
-shards-cli caption clip.mp4 --font-size 96 --words-per-group 2
+# Any of the 24 themes/fonts, plus styling + transcription overrides
+shards-cli caption clip.mp4 --theme bebas --font-size 96 --words-per-group 2
+shards-cli caption clip.mp4 --model medium --language en --quality high -o out.mp4
 
 # TUI
 shards
@@ -188,6 +201,7 @@ shards-cli config --video-format centered
 shards-cli config --output-dir ~/Videos/Shards   # clips go to ~/Videos/Shards/<video name>
 shards-cli config --caption-theme cyberpunk
 shards-cli config --caption-position bottom
+shards-cli config --captions false
 shards-cli config --words-per-group 2
 ```
 

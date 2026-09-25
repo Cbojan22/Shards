@@ -16,12 +16,22 @@ function bundledFontsDir(): string | undefined {
 }
 
 /**
+ * Escape a path for use as a filter option value inside a filtergraph (both
+ * -vf and -filter_script). FFmpeg unescapes twice: once for the option value
+ * (`\ ' :`) and once for the graph (`\ ' [ ] , ;`). Escaping only colons let
+ * a quote or comma in the repo path silently drop the bundled fonts.
+ */
+export function escapeFilterValue(value: string): string {
+  return value.replace(/[\\':]/g, '\\$&').replace(/[\\'[\],;]/g, '\\$&');
+}
+
+/**
  * Build the `:fontsdir=…` suffix for the libass `ass` filter so it can resolve
- * our bundled .ttf faces. Colons are escaped like the subtitle path; empty
- * when no dir is given so we never hand ffmpeg a bogus fontsdir.
+ * our bundled .ttf faces. Empty when no dir is given so we never hand ffmpeg a
+ * bogus fontsdir.
  */
 function fontsDirArg(fontsDir?: string): string {
-  return fontsDir ? `:fontsdir=${fontsDir.replace(/:/g, '\\:')}` : '';
+  return fontsDir ? `:fontsdir=${escapeFilterValue(fontsDir)}` : '';
 }
 
 /**
@@ -87,24 +97,6 @@ export function getVideoMetadata(inputPath: string): Promise<VideoMetadata> {
           : 44100,
       });
     });
-  });
-}
-
-export function extractClip(
-  inputPath: string,
-  outputPath: string,
-  start: number,
-  end: number
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
-      .setStartTime(start)
-      .setDuration(end - start)
-      .outputOptions(['-c', 'copy', '-avoid_negative_ts', 'make_zero'])
-      .output(outputPath)
-      .on('error', (err) => reject(new Error(`Extract clip failed: ${err.message}`)))
-      .on('end', () => resolve())
-      .run();
   });
 }
 
@@ -240,7 +232,7 @@ export async function renderClipWithReframe(job: {
       const subFilterPath = join(tmpdir(), `shards_sub_${randomUUID()}.txt`);
       await writeFile(
         subFilterPath,
-        `ass=${job.subtitlePath.replace(/:/g, '\\:')}${fontsDirArg(bundledFontsDir())}`,
+        `ass=${escapeFilterValue(job.subtitlePath)}${fontsDirArg(bundledFontsDir())}`,
       );
       const subArgs = [
         '-y', '-i', step1Output,
@@ -345,12 +337,10 @@ export function buildBurnCaptionsArgs(p: BuildBurnCaptionsArgsParams): string[] 
     : ['-c:v', 'libx264', '-preset', preset, '-crf', String(crf)];
 
   if (p.useAssFilter) {
-    // libass: colons inside the filter graph must be escaped with `\:`
-    const escapedSub = p.subtitlePath.replace(/:/g, '\\:');
     return [
       '-y',
       '-i', p.inputPath,
-      '-vf', `ass=${escapedSub}${fontsDirArg(p.fontsDir)}`,
+      '-vf', `ass=${escapeFilterValue(p.subtitlePath)}${fontsDirArg(p.fontsDir)}`,
       ...encoder,
       '-c:a', 'copy',
       '-movflags', '+faststart',

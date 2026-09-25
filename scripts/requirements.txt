@@ -1,6 +1,8 @@
-faster-whisper
-opencv-python-headless
-numpy<2
-torch
-torchvision
-facenet-pytorch
+# Pinned to a verified-working set. facenet-pytorch 2.5.x requires torch<2.3,
+# which is what holds torch/torchvision back — bump them together.
+faster-whisper==1.2.1
+opencv-python-headless==4.11.0.86
+numpy==1.26.4
+torch==2.2.2
+torchvision==0.17.2
+facenet-pytorch==2.5.3

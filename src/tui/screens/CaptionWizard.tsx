@@ -15,10 +15,12 @@ import {
   CAPTION_THEME_IDS,
   type CaptionThemeId,
 } from '../../pipeline/captions/themes.js';
+import { WhisperModelStep } from '../components/WhisperModelStep.js';
 
 export interface CaptionWizardAnswers {
   inputPath: string;
   outputPath: string;       // '' means: derive at run time
+  whisperModel: string;
   captionTheme: CaptionThemeId;
   captionPosition: 'top' | 'center' | 'bottom';
   captionFontSize: number;
@@ -31,8 +33,8 @@ interface CaptionWizardProps {
   onSubmit: (answers: CaptionWizardAnswers) => void;
 }
 
-type StepKey = 'inputPath' | 'theme' | 'position' | 'fontSize' | 'wordsPerGroup' | 'confirm';
-const STEPS: StepKey[] = ['inputPath', 'theme', 'position', 'fontSize', 'wordsPerGroup', 'confirm'];
+type StepKey = 'inputPath' | 'model' | 'theme' | 'position' | 'fontSize' | 'wordsPerGroup' | 'confirm';
+const STEPS: StepKey[] = ['inputPath', 'model', 'theme', 'position', 'fontSize', 'wordsPerGroup', 'confirm'];
 
 const FONT_SIZE_MIN = 24;
 const FONT_SIZE_MAX = 240;
@@ -69,6 +71,7 @@ export function CaptionWizard({ initial, onCancel, onSubmit }: CaptionWizardProp
       </Box>
 
       {STEPS[step] === 'inputPath' && <PathStep answers={answers} update={update} advance={advance} error={error} setError={setError} />}
+      {STEPS[step] === 'model' && <ModelStep answers={answers} update={update} advance={advance} />}
       {STEPS[step] === 'theme' && <ThemeStep answers={answers} update={update} advance={advance} />}
       {STEPS[step] === 'position' && <PositionStep answers={answers} update={update} advance={advance} />}
       {STEPS[step] === 'fontSize' && <FontSizeStep answers={answers} update={update} advance={advance} error={error} setError={setError} />}
@@ -112,6 +115,18 @@ function PathStep({ answers, update, advance, error, setError }: StepProps) {
         <Box marginTop={1}><Text color={TUI.error}>{error}</Text></Box>
       )}
     </Frame>
+  );
+}
+
+function ModelStep({ answers, update, advance }: StepProps) {
+  return (
+    <WhisperModelStep
+      value={answers.whisperModel}
+      onSelect={(model) => {
+        update('whisperModel', model);
+        advance();
+      }}
+    />
   );
 }
 
@@ -238,6 +253,7 @@ function ConfirmStep({ answers, onSubmit, advance }: { answers: CaptionWizardAns
   const rows: Array<[string, string]> = [
     ['input',     answers.inputPath],
     ['output',    answers.outputPath || defaultOut],
+    ['whisper',   answers.whisperModel],
     ['theme',     answers.captionTheme],
     ['position',  answers.captionPosition],
     ['font size', String(answers.captionFontSize)],

@@ -225,12 +225,6 @@ export interface PipelineConfig {
   analyzeOnly?: boolean;
 }
 
-export interface PipelineProgress {
-  stage: string;
-  progress: number;
-  message: string;
-}
-
 /**
  * Inputs for the caption-only flow. Used by both the CLI subcommand and the
  * TUI's caption-only run screen. Captures everything needed to transcribe an
